@@ -1,25 +1,30 @@
 import logging
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import PermissionDenied
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
-from rest_framework import status, generics, permissions
-from rest_framework.response import Response
-from rest_framework.views import APIView
-from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework import generics, status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework_simplejwt.views import TokenObtainPairView
 
+from .models import DoctorAvailability
 from .serializers import (
-    UserSerializer, UserProfileSerializer, DoctorProfileSerializer,
-    CustomTokenObtainPairSerializer, ChangePasswordSerializer,
-    ResetPasswordEmailSerializer, SetNewPasswordSerializer
+    ChangePasswordSerializer,
+    CustomTokenObtainPairSerializer,
+    ResetPasswordEmailSerializer,
+    SetNewPasswordSerializer,
+    UserProfileSerializer,
+    UserSerializer,
 )
-from .models import User, DoctorAvailability, DoctorSpecialization, DoctorEducation
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
+
+
 
 class RegisterView(generics.CreateAPIView):
     """View for user registration"""
@@ -40,9 +45,13 @@ class RegisterView(generics.CreateAPIView):
             status=status.HTTP_201_CREATED
         )
 
+
+
 class CustomTokenObtainPairView(TokenObtainPairView):
     """Custom token obtain view to use our serializer"""
     serializer_class = CustomTokenObtainPairSerializer
+
+
 
 class UserProfileView(generics.RetrieveUpdateAPIView):
     """View to retrieve and update user profile"""
@@ -51,6 +60,8 @@ class UserProfileView(generics.RetrieveUpdateAPIView):
 
     def get_object(self):
         return self.request.user
+
+
 
 class ChangePasswordView(generics.UpdateAPIView):
     """View for changing user password"""
@@ -74,6 +85,8 @@ class ChangePasswordView(generics.UpdateAPIView):
         
         return Response({"message": "Password updated successfully"}, status=status.HTTP_200_OK)
 
+
+
 class RequestPasswordResetEmail(generics.GenericAPIView):
     """View for requesting password reset email"""
     permission_classes = (AllowAny,)
@@ -94,6 +107,8 @@ class RequestPasswordResetEmail(generics.GenericAPIView):
             {'message': 'If an account exists with this email, you will receive a password reset link.'},
             status=status.HTTP_200_OK
         )
+
+
 
 class PasswordTokenCheckAPI(generics.GenericAPIView):
     """View to verify password reset token"""
@@ -122,6 +137,8 @@ class PasswordTokenCheckAPI(generics.GenericAPIView):
                 {'error': 'Link is no longer valid'},
                 status=status.HTTP_401_UNAUTHORIZED
             )
+
+
 
 class SetNewPasswordAPIView(generics.GenericAPIView):
     """View to set a new password after password reset"""
@@ -155,6 +172,8 @@ class SetNewPasswordAPIView(generics.GenericAPIView):
                 {'error': 'Something went wrong'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+
 
 class DoctorAvailabilityView(generics.ListCreateAPIView):
     """View to manage doctor's availability"""
