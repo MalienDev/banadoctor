@@ -1,0 +1,214 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    environment: production
+    region: eu-west-1
+
+# Règles d'alerte
+rule_files:
+  - '/etc/prometheus/rules/*.rules'
+  - '/etc/prometheus/alert-rules/*.yaml'
+
+# Configuration de la découverte des cibles
+scrape_configs:
+  # Auto-découverte des nœuds Kubernetes
+  - job_name: 'kubernetes-nodes'
+    kubernetes_sd_configs:
+    - role: node
+    relabel_configs:
+    - source_labels: [__address__]
+      regex: '(.*):10250'
+      replacement: '${1}:9100'
+      target_label: __address__
+      action: replace
+    - action: labelmap
+      regex: __meta_kubernetes_node_label_(.+)
+
+  # Auto-découverte des services Kubernetes
+  - job_name: 'kubernetes-service-endpoints'
+    kubernetes_sd_configs:
+    - role: endpoints
+    relabel_configs:
+    - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+      action: keep
+      regex: true
+    - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scheme]
+      action: replace
+      target_label: __scheme__
+      regex: (https?)
+    - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+      action: replace
+      target_label: __metrics_path__
+      regex: (.+)
+    - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+      action: replace
+      target_label: __address__
+      regex: ([^:]+)(?::\d+)?;(\d+)
+      replacement: $1:$2
+    - action: labelmap
+      regex: __meta_kubernetes_service_label_(.+)
+    - source_labels: [__meta_kubernetes_namespace]
+      action: replace
+      target_label: kubernetes_namespace
+    - source_labels: [__meta_kubernetes_service_name]
+      action: replace
+      target_label: kubernetes_name
+
+  # Configuration pour exporter les métriques de l'application Django
+  - job_name: 'django-app'
+    metrics_path: '/metrics/'
+    scheme: 'http'
+    static_configs:
+    - targets: ['django:8000']
+    metrics_path: /metrics/
+    relabel_configs:
+    - source_labels: [__address__]
+      regex: '([^:]+)(?::\d+)?'
+      target_label: instance
+      replacement: '${1}:8000'
+
+  # Configuration pour exporter les métriques Redis
+  - job_name: 'redis'
+    static_configs:
+    - targets: ['redis:9121']
+    metrics_path: /scrape
+    params:
+      target: ['redis://redis:6379']
+
+  # Configuration pour exporter les métriques PostgreSQL
+  - job_name: 'postgres'
+    static_configs:
+    - targets: ['postgres:9187']
+
+  # Configuration pour exporter les métriques de l'API Kubernetes
+  - job_name: 'kubernetes-apiservers'
+    kubernetes_sd_configs:
+    - role: endpoints
+      namespaces:
+        names: [default]
+    scheme: https
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      insecure_skip_verify: true
+    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    relabel_configs:
+    - source_labels: [__meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+      action: keep
+      regex: kubernetes;https
+
+  # Configuration pour exporter les métriques des conteneurs
+  - job_name: 'kubernetes-pods'
+    kubernetes_sd_configs:
+    - role: pod
+    relabel_configs:
+    - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+      action: keep
+      regex: true
+    - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+      action: replace
+      target_label: __metrics_path__
+      regex: (.+)
+    - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+      action: replace
+      regex: ([^:]+)(?::\d+)?;(\d+)
+      replacement: $1:$2
+      target_label: __address__
+    - action: labelmap
+      regex: __meta_kubernetes_pod_label_(.+)
+    - source_labels: [__meta_kubernetes_namespace]
+      action: replace
+      target_label: kubernetes_namespace
+    - source_labels: [__meta_kubernetes_pod_name]
+      action: replace
+      target_label: kubernetes_pod_name
+
+# Configuration d'Alertmanager
+alerting:
+  alertmanagers:
+  - static_configs:
+    - targets:
+      - alertmanager:9093
+
+# Configuration du stockage
+tsdb:
+  retention: 15d
+  out_of_order_time_window: 1h
+
+# Configuration des règles d'alerte
+alert_rules:
+  groups:
+    - name: node.rules
+      rules:
+      - alert: HighNodeCPU
+        expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100 > 80
+        for: 15m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is {{ $value }}%"
+
+    - name: kubernetes.rules
+      rules:
+      - alert: ContainerKilled
+        expr: time() - container_last_seen > 60
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Container killed (instance {{ $labels.instance }})"
+          description: "A container has disappeared"
+
+# Configuration du service discovery pour les métriques personnalisées
+  - job_name: 'custom-metrics'
+    metrics_path: /metrics
+    static_configs:
+    - targets: ['custom-metrics:8080']
+
+# Configuration pour les métriques de l'application frontend
+  - job_name: 'frontend-metrics'
+    metrics_path: '/_next/static/chunks/pages/_app-1234567890abcdef.js'
+    static_configs:
+    - targets: ['frontend:3000']
+    metric_relabel_configs:
+    - source_labels: [__name__]
+      regex: 'frontend_.*'
+      action: keep
+
+# Configuration pour les métriques de la file d'attente Celery
+  - job_name: 'celery-metrics'
+    static_configs:
+    - targets: ['celery:9808']
+    metrics_path: /metrics
+
+# Configuration pour les métriques du cache Redis
+  - job_name: 'redis-metrics'
+    static_configs:
+    - targets: ['redis:9121']
+    metrics_path: /scrape
+    params:
+      target: ['redis://redis:6379']
+
+# Configuration pour les métriques de la base de données
+  - job_name: 'postgres-metrics'
+    static_configs:
+    - targets: ['postgres:9187']
+
+# Configuration pour les métriques du load balancer
+  - job_name: 'nginx-metrics'
+    static_configs:
+    - targets: ['nginx:9113']
+    metrics_path: /metrics
+
+# Configuration pour les métriques du système de fichiers
+  - job_name: 'node-filesystem'
+    metrics_path: /metrics
+    static_configs:
+    - targets: ['node-exporter:9100']
+    metric_relabel_configs:
+    - source_labels: [__name__]
+      regex: 'node_filesystem_.*'
+      action: keep

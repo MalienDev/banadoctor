@@ -1,0 +1,171 @@
+---
+# Installation d'Apache Solr avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: solr
+  namespace: search
+spec:
+  repo: https://charts.bitnami.com/bitnami
+  chart: solr
+  version: "6.3.0"
+  targetNamespace: search
+  createNamespace: true
+  valuesContent: |-
+    # Configuration de base
+    image:
+      registry: docker.io
+      repository: bitnami/solr
+      tag: 9.1.1-debian-11-r0
+      pullPolicy: IfNotPresent
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: 2
+        memory: 4Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    
+    # Configuration du nombre de répliques
+    replicaCount: 3
+    
+    # Configuration de la persistance
+    persistence:
+      enabled: true
+      storageClass: "ssd"
+      size: 50Gi
+      accessModes:
+        - ReadWriteOnce
+    
+    # Configuration de l'authentification
+    auth:
+      enabled: true
+      type: basic
+      username: "admin"
+      password: "${SOLR_ADMIN_PASSWORD}"
+      existingSecret: "solr-secrets"
+      existingSecretPasswordKey: "admin-password"
+    
+    # Configuration de Zookeeper
+    zookeeper:
+      enabled: true
+      replicaCount: 3
+      persistence:
+        enabled: true
+        storageClass: "ssd"
+        size: 20Gi
+      resources:
+        limits:
+          cpu: 1
+          memory: 2Gi
+        requests:
+          cpu: 250m
+          memory: 512Mi
+    
+    # Configuration des collections initiales
+    collections: []
+    
+    # Configuration des paramètres Solr
+    solrOpts: "-Ddisable.configEdit=true -Djava.security.egd=file:/dev/./urandom -Dlog4j2.formatMsgNoLookups=true -Dlog4j2.enableJndi=false -Dlog4j2.formatMsgNoLookups=true -Dlog4j2.enableJndiLookup=false"
+    
+    # Configuration de la surveillance
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        additionalLabels:
+          release: kube-prometheus-stack
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - solr
+            topologyKey: "kubernetes.io/hostname"
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Configuration de la politique réseau pour Apache Solr
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-solr-traffic
+  namespace: search
+spec:
+  description: "Allow traffic to Apache Solr"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: solr
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: banadoctor-backend
+    toPorts:
+    - ports:
+      - port: "8983"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: solr
+    toPorts:
+    - ports:
+      - port: "8983"
+        protocol: TCP
+      - port: "9983"
+        protocol: TCP
+  egress: []
+---
+# Configuration de la politique réseau pour Zookeeper
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-solr-zookeeper-traffic
+  namespace: search
+spec:
+  description: "Allow traffic to Zookeeper for Solr"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: solr-zookeeper
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: solr
+    toPorts:
+    - ports:
+      - port: "2181"
+        protocol: TCP
+      - port: "2888"
+        protocol: TCP
+      - port: "3888"
+        protocol: TCP
+  egress: []
+---
+# Configuration des secrets pour Apache Solr
+apiVersion: v1
+kind: Secret
+metadata:
+  name: solr-secrets
+  namespace: search
+type: Opaque
+data:
+  admin-password: ${BASE64_SOLR_ADMIN_PASSWORD}

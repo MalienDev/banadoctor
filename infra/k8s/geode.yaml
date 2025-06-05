@@ -1,0 +1,173 @@
+---
+# Installation d'Apache Geode avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: geode
+  namespace: cache
+spec:
+  repo: https://helm.camunda.io
+  chart: camunda-platform
+  version: "8.2.0"
+  targetNamespace: cache
+  valuesContent: |-
+    # Configuration de base
+    image:
+      registry: docker.io
+      repository: apachegeode/geode
+      tag: 1.15.1
+      pullPolicy: IfNotPresent
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: 2
+        memory: 4Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    
+    # Configuration du nombre de répliques
+    replicaCount: 3
+    
+    # Configuration de la persistance
+    persistence:
+      enabled: true
+      storageClass: "ssd"
+      size: 50Gi
+      accessModes:
+        - ReadWriteOnce
+    
+    # Configuration du cluster
+    cluster:
+      name: banadoctor
+      locators: 3
+      servers: 3
+      updateStrategy:
+        type: RollingUpdate
+      podManagementPolicy: Parallel
+    
+    # Configuration de la sécurité
+    security:
+      enabled: true
+      ssl:
+        enabled: true
+        requireAuth: true
+        keystore: "/certs/keystore.jks"
+        truststore: "/certs/truststore.jks"
+        keystorePassword: "${GEODE_KEYSTORE_PASSWORD}"
+        truststorePassword: "${GEODE_TRUSTSTORE_PASSWORD}"
+      username: "admin"
+      password: "${GEODE_ADMIN_PASSWORD}"
+    
+    # Configuration des propriétés système
+    systemProperties:
+      -Dgemfire.log-level=info
+      -Dgemfire.enable-cluster-configuration=true
+      -Dgemfire.use-cluster-configuration=true
+      -Dgemfire.jmx-manager=true
+      -Dgemfire.jmx-manager-start=true
+      -Dgemfire.jmx-manager-http-port=7070
+      -Dgemfire.http-service-port=7070
+      -Dgemfire.http-service-bind-address=0.0.0.0
+      -Dgemfire.start-dev-rest-api=true
+      -Dgemfire.http-service-bind-address=0.0.0.0
+      -Dgemfire.jmx-manager-bind-address=0.0.0.0
+      -Dgemfire.jmx-manager-hostname-for-clients=*
+      -Dgemfire.remote-locators=geode-locator.cache.svc.cluster.local[10334]
+      -Dgemfire.locators=geode-locator.cache.svc.cluster.local[10334]
+    
+    # Configuration des régions
+    regions:
+      - name: Customers
+        type: PARTITION
+        dataPolicy: PARTITION
+      - name: Orders
+        type: PARTITION
+        dataPolicy: PERSISTENT_PARTITION
+      - name: Products
+        type: REPLICATE
+        dataPolicy: REPLICATE
+    
+    # Configuration de la surveillance
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        additionalLabels:
+          release: kube-prometheus-stack
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - geode
+            topologyKey: "kubernetes.io/hostname"
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Configuration de la politique réseau pour Apache Geode
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-geode-traffic
+  namespace: cache
+spec:
+  description: "Allow traffic to Apache Geode"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: geode
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: banadoctor-backend
+    toPorts:
+    - ports:
+      - port: "10334"
+        protocol: TCP
+      - port: "40404"
+        protocol: TCP
+      - port: "7070"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: geode
+    toPorts:
+    - ports:
+      - port: "10334-10433"
+        protocol: TCP
+      - port: "40404"
+        protocol: TCP
+      - port: "7070"
+        protocol: TCP
+  egress: []
+---
+# Configuration des secrets pour Apache Geode
+apiVersion: v1
+kind: Secret
+metadata:
+  name: geode-secrets
+  namespace: cache
+type: Opaque
+data:
+  admin-password: ${BASE64_GEODE_ADMIN_PASSWORD}
+  keystore-password: ${BASE64_GEODE_KEYSTORE_PASSWORD}
+  truststore-password: ${BASE64_GEODE_TRUSTSTORE_PASSWORD}

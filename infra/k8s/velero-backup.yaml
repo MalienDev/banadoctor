@@ -1,0 +1,169 @@
+---
+# Configuration du Schedule de sauvegarde quotidienne
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: daily-backup
+  namespace: velero
+spec:
+  # Exécution quotidienne à minuit
+  schedule: "0 0 * * *"
+  # Configuration du template de sauvegarde
+  template:
+    # Inclure tous les espaces de noms sauf kube-system et velero
+    includedNamespaces:
+    - "*"
+    excludedNamespaces:
+    - kube-system
+    - velero
+    
+    # Inclure toutes les ressources
+    includedResources:
+    - "*"
+    
+    # Exclure les ressources système et les secrets
+    excludedResources:
+    - nodes
+    - events
+    - events.events.k8s.io
+    - backups.velero.io
+    - restores.velero.io
+    - resticrepositories.velero.io
+    - csinodes.storage.k8s.io
+    - volumeattachments.storage.k8s.io
+    - csistoragecapacities.storage.k8s.io
+    - runtimeclasses.node.k8s.io
+    - csinodes.storage.k8s.io
+    - csidrivers.storage.k8s.io
+    - storageclasses.storage.k8s.io
+    - volumesnapshotclasses.snapshot.storage.k8s.io
+    - volumesnapshotcontents.snapshot.storage.k8s.io
+    - volumesnapshots.snapshot.storage.k8s.io
+    
+    # Inclure les ressources de volume
+    includeClusterResources: true
+    
+    # Étiquettes pour organiser les sauvegardes
+    labels:
+      app.kubernetes.io/name: banadoctor
+      backup-type: daily
+    
+    # Configuration du stockage
+    storageLocation: default
+    
+    # Configuration de la rétention (30 jours)
+    ttl: 720h0m0s
+    
+    # Configuration Hooks (pré/post sauvegarde)
+    hooks:
+      resources:
+      - name: pre-backup-hook
+        includedNamespaces:
+        - medecin-africa
+        labelSelector:
+          matchLabels:
+            app: postgres
+        pre:
+          - exec:
+              container: postgres
+              command:
+                - /bin/sh
+                - -c
+                - "pg_dumpall -U $POSTGRES_USER -h localhost > /backups/pre-backup.sql"
+              onError: Fail
+              timeout: 30s
+    
+    # Configuration des volumes
+    defaultVolumesToRestic: true
+---
+# Configuration pour la sauvegarde des volumes persistants
+apiVersion: velero.io/v1
+kind: BackupStorageLocation
+metadata:
+  name: default
+  namespace: velero
+spec:
+  provider: aws
+  objectStorage:
+    bucket: banadoctor-backups
+    prefix: velero
+  config:
+    region: eu-west-1
+    s3ForcePathStyle: "true"
+    s3Url: https://s3.eu-west-1.amazonaws.com
+---
+# Configuration des emplacements de stockage de volume
+apiVersion: velero.io/v1
+kind: VolumeSnapshotLocation
+metadata:
+  name: aws-default
+  namespace: velero
+spec:
+  provider: aws
+  config:
+    region: eu-west-1
+---
+# Politique de rétention des sauvegardes
+apiVersion: velero.io/v1
+kind: DeleteBackupRequest
+metadata:
+  name: backup-retention-policy
+  namespace: velero
+spec:
+  backupName: daily-backup
+  deleteBackupData: true
+  deleteBackupPods: true
+  deleteRestores: true
+  deleteRestorePods: true
+  deleteBackupLogs: true
+  deleteBackupLogsOlderThan: 720h # 30 jours
+---
+# Configuration pour la restauration de sauvegarde
+apiVersion: velero.io/v1
+kind: Restore
+metadata:
+  name: restore-daily-backup
+  namespace: velero
+spec:
+  backupName: daily-backup
+  includedNamespaces:
+  - "*"
+  excludedNamespaces:
+  - kube-system
+  - velero
+  includedResources:
+  - "*"
+  excludedResources:
+  - nodes
+  - events
+  - events.events.k8s.io
+  - backups.velero.io
+  - restores.velero.io
+  - resticrepositories.velero.io
+  restorePVs: true
+  restoreStatus:
+    includedResources:
+    - pods
+    - deployments
+    - statefulsets
+    - daemonsets
+    - replicasets
+    - jobs
+    - cronjobs
+  hooks:
+    resources:
+    - name: post-restore-hook
+      includedNamespaces:
+      - medecin-africa
+      labelSelector:
+        matchLabels:
+          app: postgres
+      post:
+        - exec:
+            container: postgres
+            command:
+              - /bin/sh
+              - -c
+              - "psql -U $POSTGRES_USER -h localhost -f /backups/pre-backup.sql"
+            onError: Fail
+            timeout: 5m

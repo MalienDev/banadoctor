@@ -1,0 +1,191 @@
+---
+# Installation de Neo4j avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: neo4j
+  namespace: graph
+spec:
+  repo: https://helm.neo4j.com/neo4j
+  chart: neo4j
+  version: "5.12.0"
+  targetNamespace: graph
+  createNamespace: true
+  valuesContent: |-
+    # Configuration de base
+    image:
+      repository: "neo4j"
+      tag: "5.12.0-enterprise"
+      pullPolicy: IfNotPresent
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: 2
+        memory: 4Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    
+    # Configuration du nombre de répliques
+    core:
+      numberOfServers: 3
+      pdb:
+        enabled: true
+        minAvailable: 2
+    
+    # Configuration de la persistance
+    volumes:
+      data:
+        mode: "storage"
+        storageClass: "ssd"
+        size: 100Gi
+    
+    # Configuration de l'authentification
+    auth:
+      enabled: true
+      neo4jPassword: "${NEO4J_PASSWORD}"
+    
+    # Configuration du service
+    services:
+      neo4j:
+        type: ClusterIP
+        httpPort: 7474
+        httpsPort: 7473
+        boltPort: 7687
+        boltTLS: true
+    
+    # Configuration du cluster
+    cluster:
+      enabled: true
+      initialMembers: 3
+      coreServers: "3"
+      readReplicaServers: "0"
+      acceptLicenseAgreement: "yes"
+      defaultDatabase: "neo4j"
+      minimumInitialInstances: 2
+      discovery:
+        enabled: true
+        type: KUBERNETES
+      tls:
+        bolt:
+          type: DEFAULT
+        https:
+          type: DEFAULT
+    
+    # Configuration des paramètres Neo4j
+    config:
+      # Configuration de la mémoire
+      dbms.memory.heap.initial_size: "2g"
+      dbms.memory.heap.max_size: "2g"
+      dbms.memory.pagecache.size: "1g"
+      
+      # Configuration du réseau
+      dbms.default_listen_address: "0.0.0.0"
+      dbms.default_advertised_address: "neo4j.graph.svc.cluster.local"
+      
+      # Configuration du cluster
+      dbms.mode: "CORE"
+      dbms.cluster.raft.discovery.type: "K8S"
+      dbms.cluster.raft.discovery.kubernetes.label_selector: "app.kubernetes.io/name=neo4j"
+      dbms.cluster.raft.discovery.kubernetes.service_name: "neo4j"
+      dbms.cluster.raft.discovery.kubernetes.namespace: "graph"
+      
+      # Configuration de la sécurité
+      dbms.security.procedures.unrestricted: "apoc.*,gds.*"
+      dbms.security.procedures.allowlist: "apoc.*,gds.*"
+      
+      # Configuration des logs
+      dbms.logs.debug.level: "INFO"
+      dbms.logs.query.time_logging_enabled: "true"
+      dbms.logs.query.parameter_logging_enabled: "true"
+    
+    # Configuration des plugins
+    plugins:
+      APOC: "4.4.0.3"
+      APOC_CORE: "4.4.0.3"
+      APOC_EXTENDED: "4.4.0.3"
+      BLOOM: "4.4.0"
+      GRAPH_DATA_SCIENCE: "2.3.6"
+      NEO4J_SPATIAL: "1.0.0-neo4j-4.4.0"
+    
+    # Configuration de la surveillance
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        additionalLabels:
+          release: kube-prometheus-stack
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - neo4j
+            topologyKey: "kubernetes.io/hostname"
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Configuration de la politique réseau pour Neo4j
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-neo4j-traffic
+  namespace: graph
+spec:
+  description: "Allow traffic to Neo4j"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: neo4j
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: banadoctor-backend
+    toPorts:
+    - ports:
+      - port: "7474"
+        protocol: TCP
+      - port: "7473"
+        protocol: TCP
+      - port: "7687"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: neo4j
+    toPorts:
+    - ports:
+      - port: "5000"
+        protocol: TCP
+      - port: "6000"
+        protocol: TCP
+      - port: "7000"
+        protocol: TCP
+  egress: []
+---
+# Configuration des secrets pour Neo4j
+apiVersion: v1
+kind: Secret
+metadata:
+  name: neo4j-secrets
+  namespace: graph
+type: Opaque
+data:
+  neo4j-password: ${BASE64_NEO4J_PASSWORD}

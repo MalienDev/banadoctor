@@ -1,0 +1,234 @@
+---
+# Installation de MinIO avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: minio
+  namespace: storage
+spec:
+  repo: https://charts.bitnami.com/bitnami
+  chart: minio
+  version: "12.0.0"
+  targetNamespace: storage
+  createNamespace: true
+  valuesContent: |-
+    # Configuration de base
+    image:
+      registry: docker.io
+      repository: bitnami/minio
+      tag: 2023.1.31-debian-11-r0
+      pullPolicy: IfNotPresent
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: 2
+        memory: 4Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    
+    # Configuration du nombre de répliques
+    replicaCount: 4
+    
+    # Configuration de la persistance
+    persistence:
+      enabled: true
+      storageClass: "ssd"
+      size: 100Gi
+      accessModes:
+        - ReadWriteOnce
+    
+    # Configuration de l'authentification
+    auth:
+      rootUser: minioadmin
+      rootPassword: "${MINIO_ROOT_PASSWORD}
+    
+    # Configuration du service
+    service:
+      type: ClusterIP
+      ports:
+        api: 9000
+        console: 9001
+    
+    # Configuration de l'ingress
+    ingress:
+      enabled: true
+      ingressClassName: nginx
+      hostname: minio.banadoctor.com
+      path: /
+      annotations:
+        nginx.ingress.kubernetes.io/proxy-body-size: "0"
+        nginx.ingress.kubernetes.io/proxy-connect-timeout: "600"
+        nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+        nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+      tls: true
+      extraTls:
+        - hosts:
+            - minio.banadoctor.com
+          secretName: minio-tls
+    
+    # Configuration des buckets
+    buckets: []
+    
+    # Configuration des politiques de bucket
+    defaultBuckets: |
+      name: banadoctor
+      policy: none
+      purge: false
+    
+    # Configuration des utilisateurs
+    users: []
+    
+    # Configuration des politiques
+    policies: []
+    
+    # Configuration de la surveillance
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        additionalLabels:
+          release: kube-prometheus-stack
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - minio
+            topologyKey: "kubernetes.io/hostname"
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Installation de MinIO Client (mc)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio-client
+  namespace: storage
+  labels:
+    app: minio-client
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio-client
+  template:
+    metadata:
+      labels:
+        app: minio-client
+    spec:
+      containers:
+      - name: minio-client
+        image: minio/mc:RELEASE.2023-02-09T05-16-53Z
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            sleep 3600
+        env:
+        - name: MC_HOST_myminio
+          value: "http://minioadmin:${MINIO_ROOT_PASSWORD}@minio.storage.svc.cluster.local:9000"
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+        volumeMounts:
+        - name: config-dir
+          mountPath: /root/.mc
+      volumes:
+      - name: config-dir
+        emptyDir: {}
+      restartPolicy: Always
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+---
+# Configuration de la politique réseau pour MinIO
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-minio-traffic
+  namespace: storage
+spec:
+  description: "Allow traffic to MinIO"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: minio
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: banadoctor-backend
+    toPorts:
+    - ports:
+      - port: "9000"
+        protocol: TCP
+      - port: "9001"
+        protocol: TCP
+  egress: []
+---
+# Configuration de la politique réseau pour MinIO Client
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-minio-client-traffic
+  namespace: storage
+spec:
+  description: "Allow traffic from MinIO Client"
+  endpointSelector:
+    matchLabels:
+      app: minio-client
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: minio
+    toPorts:
+    - ports:
+      - port: "9000"
+        protocol: TCP
+      - port: "9001"
+        protocol: TCP
+  - toEndpoints:
+    - {}
+    toPorts:
+    - ports:
+      - port: "53"
+        protocol: UDP
+      - port: "53"
+        protocol: TCP
+      - port: "80"
+        protocol: TCP
+      - port: "443"
+        protocol: TCP
+  ingress: []
+---
+# Configuration des secrets pour MinIO
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-secrets
+  namespace: storage
+type: Opaque
+data:
+  root-password: ${BASE64_MINIO_ROOT_PASSWORD}

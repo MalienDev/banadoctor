@@ -1,0 +1,133 @@
+global:
+  # Réessayer les envois d'alertes en cas d'échec
+  resolve_timeout: 5m
+  # Configuration SMTP pour les alertes par email
+  smtp_smarthost: 'smtp.gmail.com:587'
+  smtp_from: 'alerts@banadoctor.com'
+  smtp_auth_username: 'alerts@banadoctor.com'
+  smtp_auth_password: '${SMTP_PASSWORD}'
+  smtp_require_tls: true
+
+# Configuration des templates d'alertes
+templates:
+- '/etc/alertmanager/templates/*.tmpl'
+
+# Configuration des routes
+templates:
+- '/etc/alertmanager/templates/*.tmpl'
+
+# Configuration des routes
+templates:
+- '/etc/alertmanager/templates/*.tmpl'
+
+# Configuration des routes
+templates:
+- '/etc/alertmanager/templates/*.tmpl'
+
+# Configuration des routes
+route:
+  # Le récepteur par défaut
+  receiver: 'slack-notifications'
+  # Regrouper les alertes par cluster et par alerte
+  group_by: ['alertname', 'cluster', 'service']
+  # Temps d'attente pour regrouper les alertes similaires
+  group_wait: 30s
+  # Temps d'attente avant d'envoyer la première notification pour un nouveau groupe
+  group_interval: 5m
+  # Temps d'attente avant d'envoyer une notification pour une alerte déjà envoyée
+  repeat_interval: 3h
+  
+  # Routes spécifiques pour différents types d'alertes
+  routes:
+  # Alertes critiques - notifier immédiatement
+  - match:
+      severity: 'critical'
+    receiver: 'slack-critical'
+    continue: true
+    group_wait: 10s
+    
+  # Alertes de warning - regrouper et notifier moins fréquemment
+  - match:
+      severity: 'warning'
+    receiver: 'slack-warning'
+    continue: true
+    group_wait: 1m
+    repeat_interval: 6h
+    
+  # Alertes d'information - regrouper et notifier une fois par jour
+  - match:
+      severity: 'info'
+    receiver: 'slack-info'
+    group_wait: 10m
+    repeat_interval: 24h
+
+# Configuration des récepteurs
+receivers:
+# Configuration pour les notifications Slack critiques
+- name: 'slack-critical'
+  slack_configs:
+  - api_url: '${SLACK_WEBHOOK_URL}'
+    channel: '#alerts-critical'
+    title: '{{ template "slack.banadoctor.title" . }}'
+    text: '{{ template "slack.banadoctor.text" . }}'
+    color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+    send_resolved: true
+    actions:
+    - type: button
+      text: 'Runbook'
+      url: 'https://runbook.banadoctor.com/{{ "{{ .CommonLabels.alertname }}.md" }}'
+    - type: button
+      text: 'Grafana'
+      url: '${GRAFANA_URL}'
+    - type: button
+      text: 'Alertmanager'
+      url: '${ALERTMANAGER_URL}'
+
+# Configuration pour les notifications Slack de warning
+- name: 'slack-warning'
+  slack_configs:
+  - api_url: '${SLACK_WEBHOOK_URL}'
+    channel: '#alerts-warning'
+    title: '{{ template "slack.banadoctor.title" . }}'
+    text: '{{ template "slack.banadoctor.text" . }}'
+    color: '{{ if eq .Status "firing" }}warning{{ else }}good{{ end }}'
+    send_resolved: true
+    actions:
+    - type: button
+      text: 'Runbook'
+      url: 'https://runbook.banadoctor.com/{{ "{{ .CommonLabels.alertname }}.md" }}'
+
+# Configuration pour les notifications Slack d'information
+- name: 'slack-info'
+  slack_configs:
+  - api_url: '${SLACK_WEBHOOK_URL}'
+    channel: '#alerts-info'
+    title: '{{ template "slack.banadoctor.title" . }}'
+    text: '{{ template "slack.banadoctor.text" . }}'
+    color: '{{ if eq .Status "firing" }}#439FE0{{ else }}good{{ end }}'
+    send_resolved: true
+
+# Configuration pour les notifications par email
+- name: 'email'
+  email_configs:
+  - to: 'alerts@banadoctor.com'
+    send_resolved: true
+    headers:
+      subject: '{{ template "email.banadoctor.subject" . }}'
+    html: '{{ template "email.banadoctor.html" . }}'
+
+# Configuration pour les notifications PagerDuty (pour les alertes critiques)
+- name: 'pagerduty-critical'
+  pagerduty_configs:
+  - routing_key: '${PAGERDUTY_ROUTING_KEY}'
+    service_key: '${PAGERDUTY_SERVICE_KEY}'
+    description: '{{ template "pagerduty.banadoctor.description" . }}'
+    client: 'AlertManager'
+    client_url: '${ALERTMANAGER_URL}'
+    severity: 'critical'
+    group: '{{ template "pagerduty.banadoctor.group" . }}'
+    details:
+      firing: '{{ template "pagerduty.banadoctor.firing" . }}'
+      num_firing: '{{ .Alerts.Firing | len }}'
+      num_resolved: '{{ .Alerts.Resolved | len }}'
+      resolved: '{{ template "pagerduty.banadoctor.resolved" . }}'

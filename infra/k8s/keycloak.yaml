@@ -1,0 +1,369 @@
+---
+# Installation de Keycloak avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: keycloak
+  namespace: keycloak
+spec:
+  repo: https://charts.bitnami.com/bitnami
+  chart: keycloak
+  version: "14.4.0"
+  targetNamespace: keycloak
+  createNamespace: true
+  valuesContent: |-
+    # Configuration de base
+    image:
+      registry: docker.io
+      repository: bitnami/keycloak
+      tag: 20.0.3-debian-11-r0
+      pullPolicy: IfNotPresent
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    
+    # Configuration de la base de données
+    postgresql:
+      enabled: true
+      auth:
+        username: keycloak
+        password: ${KEYCLOAK_DB_PASSWORD}
+        database: keycloak
+      primary:
+        persistence:
+          enabled: true
+          size: 20Gi
+          storageClass: "ssd"
+      resources:
+        limits:
+          cpu: 500m
+          memory: 1Gi
+        requests:
+          cpu: 100m
+          memory: 256Mi
+    
+    # Configuration de la haute disponibilité
+    replicaCount: 2
+    
+    # Configuration du cache
+    cache:
+      enabled: true
+      vendor: ispn
+      stack: tcp
+    
+    # Configuration de l'administrateur
+    auth:
+      adminUser: admin
+      adminPassword: ${KEYCLOAK_ADMIN_PASSWORD}
+      managementUser: manager
+      managementPassword: ${KEYCLOAK_MANAGER_PASSWORD}
+    
+    # Configuration du service
+    service:
+      type: ClusterIP
+      ports:
+        http: 8080
+        https: 8443
+    
+    # Configuration de l'ingress
+    ingress:
+      enabled: true
+      ingressClassName: nginx
+      hostname: auth.banadoctor.com
+      path: /
+      annotations:
+        nginx.ingress.kubernetes.io/ssl-redirect: "true"
+        nginx.ingress.kubernetes.io/proxy-buffer-size: "128k"
+        nginx.ingress.kubernetes.io/proxy-buffers: "4 256k"
+        nginx.ingress.kubernetes.io/proxy-buffer-size: "256k"
+        nginx.ingress.kubernetes.io/proxy-connect-timeout: "300"
+        nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+        nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+        nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+      tls: true
+      extraTls:
+        - hosts:
+            - auth.banadoctor.com
+          secretName: keycloak-tls
+    
+    # Configuration de la persistance
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClass: "ssd"
+    
+    # Configuration des thèmes
+    themes:
+      enabled: true
+      sources: []
+    
+    # Configuration des fournisseurs d'identité
+    identityProviders:
+      - alias: google
+        displayName: Google
+        providerId: google
+        enabled: true
+        trustEmail: true
+        config:
+          clientId: ${GOOGLE_CLIENT_ID}
+          clientSecret: ${GOOGLE_CLIENT_SECRET}
+          defaultScope: "email profile"
+      - alias: github
+        displayName: GitHub
+        providerId: github
+        enabled: true
+        trustEmail: true
+        config:
+          clientId: ${GITHUB_CLIENT_ID}
+          clientSecret: ${GITHUB_CLIENT_SECRET}
+          defaultScope: "user:email"
+    
+    # Configuration des clients
+    extraEnv: |
+      - name: KEYCLOAK_USER
+        value: ${KEYCLOAK_ADMIN_USER}
+      - name: KEYCLOAK_PASSWORD
+        value: ${KEYCLOAK_ADMIN_PASSWORD}
+      - name: PROXY_ADDRESS_FORWARDING
+        value: "true"
+      - name: KEYCLOAK_FRONTEND_URL
+        value: https://auth.banadoctor.com/auth
+    
+    # Configuration de la surveillance
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        additionalLabels:
+          release: kube-prometheus-stack
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Configuration du client BanaDoctor dans Keycloak
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-client-config
+  namespace: keycloak
+data:
+  realm.json: |
+    {
+      "realm": "banadoctor",
+      "enabled": true,
+      "registrationAllowed": true,
+      "registrationEmailAsUsername": true,
+      "verifyEmail": true,
+      "resetPasswordAllowed": true,
+      "loginTheme": "keycloak",
+      "sslRequired": "external",
+      "roles": {
+        "realm": [
+          {
+            "name": "admin",
+            "description": "Administrator"
+          },
+          {
+            "name": "user",
+            "description": "Regular user"
+          }
+        ]
+      },
+      "clients": [
+        {
+          "clientId": "banadoctor-frontend",
+          "enabled": true,
+          "publicClient": true,
+          "redirectUris": [
+            "https://*.banadoctor.com/*"
+          ],
+          "webOrigins": [
+            "+"
+          ],
+          "standardFlowEnabled": true,
+          "implicitFlowEnabled": false,
+          "directAccessGrantsEnabled": true,
+          "serviceAccountsEnabled": false,
+          "fullScopeAllowed": false,
+          "protocolMappers": [
+            {
+              "name": "audience",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              "consentRequired": false,
+              "config": {
+                "included.client.audience": "banadoctor-backend",
+                "id.token.claim": "false",
+                "access.token.claim": "true"
+              }
+            },
+            {
+              "name": "groups",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-group-membership-mapper",
+              "consentRequired": false,
+              "config": {
+                "full.path": "false",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "claim.name": "groups",
+                "userinfo.token.claim": "true"
+              }
+            },
+            {
+              "name": "email",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-usermodel-property-mapper",
+              "consentRequired": false,
+              "config": {
+                "userinfo.token.claim": "true",
+                "user.attribute": "email",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "claim.name": "email",
+                "jsonType.label": "String"
+              }
+            }
+          ]
+        },
+        {
+          "clientId": "banadoctor-backend",
+          "enabled": true,
+          "bearerOnly": true,
+          "standardFlowEnabled": false,
+          "implicitFlowEnabled": false,
+          "directAccessGrantsEnabled": false,
+          "serviceAccountsEnabled": true,
+          "fullScopeAllowed": false
+        }
+      ],
+      "users": [
+        {
+          "username": "admin",
+          "enabled": true,
+          "email": "admin@banadoctor.com",
+          "credentials": [
+            {
+              "type": "password",
+              "value": "${KEYCLOAK_ADMIN_PASSWORD}",
+              "temporary": false
+            }
+          ],
+          "realmRoles": [
+            "admin"
+          ]
+        }
+      ]
+    }
+---
+# Configuration du fournisseur d'identité pour Keycloak
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-identity-provider-secrets
+  namespace: keycloak
+type: Opaque
+data:
+  GOOGLE_CLIENT_ID: ${BASE64_GOOGLE_CLIENT_ID}
+  GOOGLE_CLIENT_SECRET: ${BASE64_GOOGLE_CLIENT_SECRET}
+  GITHUB_CLIENT_ID: ${BASE64_GITHUB_CLIENT_ID}
+  GITHUB_CLIENT_SECRET: ${BASE64_GITHUB_CLIENT_SECRET}
+---
+# Configuration du client pour la gestion de Keycloak
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak-client
+  namespace: keycloak
+  labels:
+    app: keycloak-client
+spec:
+  ports:
+    - port: 80
+      targetPort: 8080
+  selector:
+    app: keycloak
+  type: ClusterIP
+---
+# Configuration de l'ingress pour le client Keycloak
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: keycloak-client
+  namespace: keycloak
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: auth.banadoctor.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: keycloak
+                port:
+                  number: 80
+  tls:
+    - hosts:
+        - auth.banadoctor.com
+      secretName: keycloak-tls
+---
+# Configuration de la politique réseau pour Keycloak
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-keycloak-traffic
+  namespace: keycloak
+spec:
+  description: "Allow traffic to Keycloak"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak
+  ingress:
+  - fromEndpoints:
+    - {}
+    toPorts:
+    - ports:
+      - port: "8080"
+        protocol: TCP
+      - port: "8443"
+        protocol: TCP
+  egress:
+  - toEndpoints:
+    - {}
+    toPorts:
+    - ports:
+      - port: "80"
+        protocol: TCP
+      - port: "443"
+        protocol: TCP
+      - port: "53"
+        protocol: UDP
+      - port: "53"
+        protocol: TCP

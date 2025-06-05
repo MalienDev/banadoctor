@@ -1,0 +1,255 @@
+---
+# Installation d'InfluxDB avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: influxdb
+  namespace: monitoring
+spec:
+  repo: https://helm.influxdata.com/
+  chart: influxdb2
+  version: "2.8.0"
+  targetNamespace: monitoring
+  valuesContent: |-
+    # Configuration de base
+    image:
+      repository: influxdb
+      tag: 2.7.1
+      pullPolicy: IfNotPresent
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: 2
+        memory: 4Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    
+    # Configuration de la persistance
+    persistence:
+      enabled: true
+      storageClass: "ssd"
+      size: 100Gi
+      accessModes:
+        - ReadWriteOnce
+    
+    # Configuration de l'authentification
+    adminUser:
+      organization: "banadoctor"
+      bucket: "banadoctor"
+      user: "admin"
+      password: "${INFLUXDB_ADMIN_PASSWORD}
+      token: "${INFLUXDB_ADMIN_TOKEN}
+    
+    # Configuration du service
+    service:
+      type: ClusterIP
+      port: 8086
+    
+    # Configuration de l'initialisation
+    initScripts:
+      enabled: true
+      scripts:
+        create-buckets.sh: |
+          #!/bin/bash
+          set -e
+          
+          # Attendre qu'InfluxDB soit prêt
+          until curl -s http://localhost:8086/health; do
+            echo "En attente d'InfluxDB..."
+            sleep 5
+          done
+          
+          # Créer des buckets supplémentaires
+          influx bucket create -n telegraf -r 30d
+          influx bucket create -n metrics -r 90d
+          influx bucket create -n logs -r 7d
+          influx bucket create -n events -r 365d
+    
+    # Configuration de la surveillance
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        additionalLabels:
+          release: kube-prometheus-stack
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Installation de Telegraf pour la collecte de métriques
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: telegraf
+  namespace: monitoring
+spec:
+  repo: https://helm.influxdata.com/
+  chart: telegraf
+  version: "1.8.10"
+  targetNamespace: monitoring
+  valuesContent: |-
+    # Configuration de base
+    image:
+      repository: telegraf
+      tag: 1.27.2
+      pullPolicy: IfNotPresent
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: 500m
+        memory: 1Gi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+    
+    # Configuration des entrées
+    config:
+      outputs:
+        - influxdb_v2:
+            urls: ["http://influxdb.monitoring.svc.cluster.local:8086"]
+            token: "${INFLUXDB_ADMIN_TOKEN}
+            organization: "banadoctor"
+            bucket: "telegraf"
+      inputs:
+        - cpu:
+            percpu: true
+            totalcpu: true
+            collect_cpu_time: false
+            report_active: false
+        - disk:
+            ignore_fs: ["tmpfs", "devtmpfs", "devfs", "iso9660", "overlay", "aufs", "squashfs"]
+        - diskio:
+        - docker:
+            endpoint: "unix:///var/run/docker.sock"
+            container_names: []
+            timeout: "5s"
+            perdevice: true
+            total: false
+        - kernel:
+        - kubernetes:
+            url: "https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}"
+            bearer_token: "${BEARER_TOKEN}"
+            insecure_skip_verify: true
+        - mem:
+        - net:
+        - netstat:
+        - nginx:
+            urls: ["http://nginx/status"]
+        - postgresql:
+            address: "postgresql://postgres:${POSTGRES_PASSWORD}@postgresql.postgresql.svc.cluster.local:5432/banadoctor?sslmode=disable"
+        - redis:
+            servers: ["tcp://redis.redis.svc.cluster.local:6379"]
+            password: "${REDIS_PASSWORD}"
+        - system:
+        - swap:
+        - processes:
+        - procstat:
+            pattern: ".*"
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Configuration de la politique réseau pour InfluxDB
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-influxdb-traffic
+  namespace: monitoring
+spec:
+  description: "Allow traffic to InfluxDB"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: influxdb
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: telegraf
+    toPorts:
+    - ports:
+      - port: "8086"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: banadoctor-backend
+    toPorts:
+    - ports:
+      - port: "8086"
+        protocol: TCP
+  egress: []
+---
+# Configuration de la politique réseau pour Telegraf
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-telegraf-traffic
+  namespace: monitoring
+spec:
+  description: "Allow traffic from Telegraf"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: telegraf
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: influxdb
+    toPorts:
+    - ports:
+      - port: "8086"
+        protocol: TCP
+  - toEndpoints:
+    - {}
+    toPorts:
+    - ports:
+      - port: "10250"
+        protocol: TCP
+      - port: "10255"
+        protocol: TCP
+      - port: "4194"
+        protocol: TCP
+      - port: "4242"
+        protocol: TCP
+  ingress: []
+---
+# Configuration des secrets pour InfluxDB
+apiVersion: v1
+kind: Secret
+metadata:
+  name: influxdb-secrets
+  namespace: monitoring
+type: Opaque
+data:
+  admin-password: ${BASE64_INFLUXDB_ADMIN_PASSWORD}
+  admin-token: ${BASE64_INFLUXDB_ADMIN_TOKEN}

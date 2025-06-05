@@ -1,0 +1,181 @@
+groups:
+- name: node.rules
+  rules:
+  # Alertes pour les nœuds
+  - alert: HighNodeCPU
+    expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100 > 80
+    for: 15m
+    labels:
+      severity: warning
+      team: infrastructure
+    annotations:
+      summary: "High CPU usage on {{ $labels.instance }}"
+      description: "CPU usage is {{ $value }}%"
+
+  - alert: HighNodeMemory
+    expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes * 100 > 85
+    for: 15m
+    labels:
+      severity: warning
+      team: infrastructure
+    annotations:
+      summary: "High memory usage on {{ $labels.instance }}"
+      description: "Memory usage is {{ $value }}%"
+
+  - alert: HighDiskUsage
+    expr: 100 - (node_filesystem_avail_bytes{mountpoint="/", fstype!=""} * 100 / node_filesystem_size_bytes{mountpoint="/", fstype!=""}) > 85
+    for: 15m
+    labels:
+      severity: warning
+      team: infrastructure
+    annotations:
+      summary: "High disk usage on {{ $labels.instance }}"
+      description: "Disk usage is {{ $value }}%"
+
+- name: kubernetes.rules
+  rules:
+  # Alertes pour les pods
+  - alert: PodCrashLooping
+    expr: increase(kube_pod_container_status_restarts_total[1h]) > 5
+    for: 15m
+    labels:
+      severity: critical
+      team: platform
+    annotations:
+      summary: "Pod {{ $labels.pod }} is crash looping"
+      description: "Pod {{ $labels.pod }} has restarted {{ $value }} times in the last hour"
+
+  - alert: PodNotReady
+    expr: sum by (namespace, pod) (kube_pod_status_phase{phase=~"Pending|Unknown"}) > 0
+    for: 5m
+    labels:
+      severity: warning
+      team: platform
+    annotations:
+      summary: "Pod {{ $labels.pod }} is not ready"
+      description: "Pod {{ $labels.pod }} has been in a non-ready state for more than 5 minutes"
+
+- name: postgres.rules
+  rules:
+  # Alertes pour PostgreSQL
+  - alert: PostgresqlDown
+    expr: pg_up == 0
+    for: 5m
+    labels:
+      severity: critical
+      team: database
+    annotations:
+      summary: "PostgreSQL is down"
+      description: "PostgreSQL instance {{ $labels.instance }} is down"
+
+  - alert: PostgresqlHighConnections
+    expr: pg_stat_activity_count > (pg_settings_max_connections * 0.8)
+    for: 15m
+    labels:
+      severity: warning
+      team: database
+    annotations:
+      summary: "High number of PostgreSQL connections on {{ $labels.instance }}"
+      description: "PostgreSQL connections are at {{ $value }} (80% of max_connections)"
+
+- name: redis.rules
+  rules:
+  # Alertes pour Redis
+  - alert: RedisDown
+    expr: redis_up == 0
+    for: 5m
+    labels:
+      severity: critical
+      team: platform
+    annotations:
+      summary: "Redis is down"
+      description: "Redis instance {{ $labels.instance }} is down"
+
+  - alert: RedisMemoryHigh
+    expr: redis_memory_used_bytes / redis_memory_max_bytes * 100 > 80
+    for: 15m
+    labels:
+      severity: warning
+      team: platform
+    annotations:
+      summary: "High memory usage on Redis {{ $labels.instance }}"
+      description: "Redis memory usage is at {{ $value }}%"
+
+- name: application.rules
+  rules:
+  # Alertes pour l'application Django
+  - alert: HighHTTPRequestLatency
+    expr: histogram_quantile(0.95, sum(rate(django_http_requests_seconds_bucket[5m])) by (le)) > 1
+    for: 10m
+    labels:
+      severity: warning
+      team: backend
+    annotations:
+      summary: "High HTTP request latency on {{ $labels.instance }}"
+      description: "95th percentile of request latency is {{ $value }}s"
+
+  - alert: HighHTTP5xxErrorRate
+    expr: rate(django_http_responses_total{status=~'5..'}[5m]) / rate(django_http_requests_total[5m]) * 100 > 5
+    for: 10m
+    labels:
+      severity: critical
+      team: backend
+    annotations:
+      summary: "High HTTP 5xx error rate on {{ $labels.instance }}"
+      description: "5xx error rate is {{ $value }}%"
+
+  - alert: CeleryTaskFailureRate
+    expr: increase(celery_task_failures_total[1h]) > 5
+    for: 15m
+    labels:
+      severity: warning
+      team: backend
+    annotations:
+      summary: "High Celery task failure rate"
+      description: "{{ $value }} Celery tasks have failed in the last hour"
+
+- name: business.rules
+  rules:
+  # Alertes métier
+  - alert: LowAppointmentBookingRate
+    expr: rate(appointments_booked_total[1h]) < 1
+    for: 2h
+    labels:
+      severity: warning
+      team: product
+    annotations:
+      summary: "Low appointment booking rate"
+      description: "Less than 1 appointment booked per hour in the last 2 hours"
+
+  - alert: HighPaymentFailureRate
+    expr: rate(payment_failures_total[1h]) / rate(payment_attempts_total[1h]) * 100 > 10
+    for: 1h
+    labels:
+      severity: critical
+      team: payments
+    annotations:
+      summary: "High payment failure rate"
+      description: "Payment failure rate is {{ $value }}%"
+
+- name: blackbox.rules
+  rules:
+  # Alertes pour les sondes Blackbox
+  - alert: ProbeFailed
+    expr: probe_success == 0
+    for: 5m
+    labels:
+      severity: critical
+      team: infrastructure
+    annotations:
+      summary: "Probe failed for {{ $labels.instance }}"
+      description: "Probe failed for {{ $labels.instance }} ({{ $labels.job }})"
+
+  - alert: HighProbeLatency
+    expr: probe_duration_seconds > 2
+    for: 10m
+    labels:
+      severity: warning
+      team: infrastructure
+    annotations:
+      summary: "High probe latency for {{ $labels.instance }}"
+      description: "Probe latency is {{ $value }}s"

@@ -1,0 +1,319 @@
+---
+# Installation de Cilium avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: cilium
+  namespace: kube-system
+spec:
+  repo: https://helm.cilium.io/
+  chart: cilium
+  version: "1.13.4"
+  targetNamespace: kube-system
+  valuesContent: |-
+    # Configuration de base
+    image:
+      repository: quay.io/cilium/cilium
+      tag: v1.13.4
+      pullPolicy: IfNotPresent
+    
+    # Configuration des ressources
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+    
+    # Configuration de la mise en réseau
+    ipam:
+      mode: kubernetes
+    
+    # Configuration de la politique réseau
+    policyEnforcementMode: default
+    
+    # Configuration du chiffrement
+    encryption:
+      enabled: true
+      type: wireguard
+    
+    # Configuration de l'observabilité
+    hubble:
+      enabled: true
+      metrics:
+        enabled:
+          - dns
+          - drop
+          - tcp
+          - flow
+          - port-distribution
+          - icmp
+          - http
+      relay:
+        enabled: true
+      ui:
+        enabled: true
+        ingress:
+          enabled: true
+          className: nginx
+          hosts:
+            - hubble.banadoctor.com
+          tls:
+            - secretName: hubble-tls
+              hosts:
+                - hubble.banadoctor.com
+    
+    # Configuration de la surveillance
+    monitoring:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        namespace: monitoring
+        additionalLabels:
+          release: kube-prometheus-stack
+    
+    # Configuration de la journalisation
+    debug:
+      enabled: false
+    
+    # Configuration des fonctionnalités expérimentales
+    bpf:
+      masquerade: true
+      hostRouting: true
+      tls: enabled
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Configuration de la politique réseau par défaut
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: kube-system
+spec:
+  description: "Default deny all traffic"
+  endpointSelector: {}
+  ingress:
+  - {}
+  egress:
+  - {}
+---
+# Configuration de la politique réseau pour les composants système
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-kube-system
+  namespace: kube-system
+spec:
+  description: "Allow all traffic within kube-system"
+  endpointSelector: {}
+  ingress:
+  - fromEndpoints:
+    - {}
+  egress:
+  - toEndpoints:
+    - {}
+---
+# Configuration de la politique réseau pour les métriques
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-monitoring
+  namespace: monitoring
+spec:
+  description: "Allow monitoring traffic"
+  endpointSelector: {}
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        k8s:io.cilium.k8s.policy.serviceaccount: prometheus-operator
+    toPorts:
+    - ports:
+      - port: "9090"
+        protocol: TCP
+      - port: "10250"
+        protocol: TCP
+      - port: "10255"
+        protocol: TCP
+      - port: "4194"
+        protocol: TCP
+      - port: "4242"
+        protocol: TCP
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.cilium.k8s.policy.serviceaccount: prometheus-operator
+    toPorts:
+    - ports:
+      - port: "9090"
+        protocol: TCP
+      - port: "10250"
+        protocol: TCP
+      - port: "10255"
+        protocol: TCP
+      - port: "4194"
+        protocol: TCP
+      - port: "4242"
+        protocol: TCP
+---
+# Configuration de la politique réseau pour les applications
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-app-traffic
+  namespace: medecin-africa
+spec:
+  description: "Allow traffic for BanaDoctor application"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: banadoctor
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: medecin-africa
+    toPorts:
+    - ports:
+      - port: "8000"
+        protocol: TCP
+      - port: "3000"
+        protocol: TCP
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: medecin-africa
+    toPorts:
+    - ports:
+      - port: "8000"
+        protocol: TCP
+      - port: "3000"
+        protocol: TCP
+---
+# Configuration de la politique réseau pour les bases de données
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-db-traffic
+  namespace: medecin-africa
+spec:
+  description: "Allow database traffic for BanaDoctor"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: banadoctor-backend
+    toPorts:
+    - ports:
+      - port: "5432"
+        protocol: TCP
+---
+# Configuration de la politique réseau pour Redis
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-redis-traffic
+  namespace: medecin-africa
+spec:
+  description: "Allow Redis traffic for BanaDoctor"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: banadoctor-backend
+    toPorts:
+    - ports:
+      - port: "6379"
+        protocol: TCP
+---
+# Configuration de la politique réseau pour Elasticsearch
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-elasticsearch-traffic
+  namespace: medecin-africa
+spec:
+  description: "Allow Elasticsearch traffic for BanaDoctor"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: elasticsearch
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: banadoctor-backend
+    toPorts:
+    - ports:
+      - port: "9200"
+        protocol: TCP
+      - port: "9300"
+        protocol: TCP
+---
+# Configuration de la politique réseau pour les services externes
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-external-services
+  namespace: medecin-africa
+spec:
+  description: "Allow external services access"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: banadoctor-backend
+  egress:
+  - toEntities:
+    - world
+    toPorts:
+    - ports:
+      - port: "80"
+        protocol: TCP
+      - port: "443"
+        protocol: TCP
+      - port: "53"
+        protocol: UDP
+      - port: "53"
+        protocol: TCP
+---
+# Configuration de la politique réseau pour les services internes
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-internal-services
+  namespace: medecin-africa
+spec:
+  description: "Allow internal services communication"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: banadoctor-backend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+    toPorts:
+    - ports:
+      - port: "53"
+        protocol: UDP
+      - port: "53"
+        protocol: TCP
+      - port: "443"
+        protocol: TCP
+      - port: "80"
+        protocol: TCP

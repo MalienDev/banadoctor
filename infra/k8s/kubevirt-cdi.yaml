@@ -1,0 +1,297 @@
+---
+# Installation de Containerized Data Importer (CDI) avec Operator Lifecycle Manager (OLM)
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: cdi-operatorgroup
+  namespace: cdi
+  labels:
+    app: cdi
+    app.kubernetes.io/name: cdi
+    app.kubernetes.io/instance: cdi
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: banadoctor
+spec:
+  targetNamespaces:
+    - cdi
+---
+
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: cdi-operator
+  namespace: cdi
+  labels:
+    operators.coreos.com/cdi-operator.cdi: ""
+spec:
+  channel: stable
+  installPlanApproval: Automatic
+  name: cdi-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+---
+
+# Configuration de CDI
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: CDI
+metadata:
+  name: cdi
+  namespace: cdi
+  labels:
+    app: containerized-data-importer
+    app.kubernetes.io/name: cdi
+    app.kubernetes.io/instance: cdi
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: banadoctor
+spec:
+  # Configuration de la stratégie de mise à jour
+  imagePullPolicy: IfNotPresent
+  
+  # Configuration des fonctionnalités
+  config:
+    featureGates:
+      - DataVolumes
+      - CPUManager
+      - LiveMigration
+      - GPU
+      - HostDevices
+      - Snapshot
+      - HotplugVolumes
+    
+    # Configuration des certificats
+    certConfig:
+      ca:
+        duration: 48h0m0s
+        renewBefore: 24h0m0s
+      server:
+        duration: 24h0m0s
+        renewBefore: 12h0m0s
+    
+    # Configuration du stockage
+    storage:
+      scratchSpaceStorageClass: longhorn
+      podResourceRequirements: {}
+      filesystemOverhead:
+        global: "0.05"
+        storageClass:
+          longhorn: "0.1"
+  
+  # Configuration des ressources
+  resources:
+    limits:
+      cpu: "2"
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+  
+  # Configuration des tolérances
+  tolerations:
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
+    - key: "node-role.kubernetes.io/compute"
+      operator: "Exists"
+      effect: "NoSchedule"
+  
+  # Configuration de la surveillance
+  monitorNamespace: "monitoring"
+  
+  # Configuration des versions
+  version: "v1.0.0"
+
+---
+# Configuration des rôles et des autorisations pour CDI
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cdi-admin
+  labels:
+    app: cdi
+    app.kubernetes.io/name: cdi
+    app.kubernetes.io/instance: cdi
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: banadoctor
+rules:
+- apiGroups: ["cdi.kubevirt.io"]
+  resources: ["datavolumes", "datavolumes/source", "datavolumes/status"]
+  verbs: ["*"]
+- apiGroups: ["cdi.kubevirt.io"]
+  resources: ["datavolumecheckpoints", "datavolumecheckpoints/status"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["cdi.kubevirt.io"]
+  resources: ["datavolumeimports", "datavolumeimports/status"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["cdi.kubevirt.io"]
+  resources: ["datavolumeexports", "datavolumeexports/status"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["cdi.kubevirt.io"]
+  resources: ["objecttransfers", "objecttransfers/status"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+# Configuration de la politique réseau pour CDI
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cdi-traffic
+  namespace: cdi
+spec:
+  description: "Allow traffic to CDI components"
+  endpointSelector:
+    matchLabels:
+      app: containerized-data-importer
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+    toPorts:
+    - ports:
+      - port: "8443"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        k8s:app: kubevirt-operator
+    toPorts:
+    - ports:
+      - port: "8443"
+        protocol: TCP
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+    toPorts:
+    - ports:
+      - port: "443"
+        protocol: TCP
+      - port: "53"
+        protocol: UDP
+
+---
+# Configuration des StorageClasses pour CDI
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: cdi-storage
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+  labels:
+    app.kubernetes.io/name: cdi
+    app.kubernetes.io/instance: cdi
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: banadoctor
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+
+---
+# Exemple de configuration de DataVolume
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: example-datavolume
+  namespace: default
+  labels:
+    app.kubernetes.io/name: example-datavolume
+    app.kubernetes.io/instance: example-datavolume
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: banadoctor
+spec:
+  source:
+    http:
+      url: "https://cloud.centos.org/centos/8-stream/x86_64/images/CentOS-Stream-Vagrant-8-20220125.0.x86_64.qcow2"
+  pvc:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 10Gi
+    storageClassName: longhorn
+
+---
+# Configuration de la surveillance pour CDI
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cdi-monitor
+  namespace: cdi
+  labels:
+    app: containerized-data-importer
+    app.kubernetes.io/name: cdi
+    app.kubernetes.io/instance: cdi
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: banadoctor
+spec:
+  selector:
+    matchLabels:
+      cdi.kubevirt.io: ""
+  namespaceSelector:
+    matchNames:
+      - cdi
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+      scheme: http
+  jobLabel: cdi-monitor
+
+---
+# Configuration des alertes pour CDI
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cdi-alerts
+  namespace: cdi
+  labels:
+    app: containerized-data-importer
+    app.kubernetes.io/name: cdi
+    app.kubernetes.io/instance: cdi
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: banadoctor
+spec:
+  groups:
+    - name: cdi.rules
+      rules:
+        - alert: CDIDataImportCronJobFailed
+          expr: cdi_dataimportcron_outdated{type="outdated"} > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: CDI DataImportCronJob {{ $labels.name }} is outdated
+            description: "DataImportCronJob {{ $labels.name }} has not been updated for more than 24 hours"
+        
+        - alert: CDIDataVolumeHighRestartCount
+          expr: kube_pod_container_status_restarts_total{namespace=~"cdi|kubevirt"} > 5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: High restart count for CDI pod {{ $labels.pod }}
+            description: "CDI pod {{ $labels.pod }} has restarted {{ $value }} times"
+        
+        - alert: CDIDataVolumeImportFailed
+          expr: cdi_datavolume_import_status_phase{phase="Failed"} > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: CDI DataVolume import failed
+            description: "DataVolume {{ $labels.name }} import has failed"
+        
+        - alert: CDIDataVolumeImportRunningTooLong
+          expr: time() - cdi_datavolume_import_start_time_seconds > 3600
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: CDI DataVolume import is taking too long
+            description: "DataVolume {{ $labels.name }} import has been running for more than 1 hour"
+        
+        - alert: CDIDataVolumeImportProgressStalled
+          expr: rate(cdi_datavolume_import_progress_seconds_total[5m]) < 0.01
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: CDI DataVolume import progress has stalled
+            description: "DataVolume {{ $labels.name }} import progress has not increased in the last 15 minutes"

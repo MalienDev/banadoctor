@@ -1,0 +1,293 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: compute-resources
+  namespace: medecin-africa
+spec:
+  hard:
+    requests.cpu: "20"
+    requests.memory: 40Gi
+    limits.cpu: "40"
+    limits.memory: 80Gi
+    requests.storage: 500Gi
+    pods: "100"
+    services: "50"
+    configmaps: "100"
+    secrets: "100"
+    persistentvolumeclaims: "20"
+---
+# Limites de ressources par conteneur
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: container-limits
+  namespace: medecin-africa
+spec:
+  limits:
+  - type: Container
+    default:
+      cpu: "500m"
+      memory: "1Gi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "256Mi"
+    max:
+      cpu: "4"
+      memory: "8Gi"
+    min:
+      cpu: "50m"
+      memory: "64Mi"
+  - type: Pod
+    max:
+      cpu: "8"
+      memory: "16Gi"
+  - type: PersistentVolumeClaim
+    min:
+      storage: "1Gi"
+    max:
+      storage: "100Gi"
+---
+# Configuration des ressources pour les déploiements principaux
+---
+# Backend Django
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: medecin-africa
+spec:
+  template:
+    spec:
+      containers:
+      - name: django
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+            ephemeral-storage: "1Gi"
+          limits:
+            cpu: "2000m"
+            memory: "2Gi"
+            ephemeral-storage: "2Gi"
+        volumeMounts:
+        - name: media
+          mountPath: /app/media
+      volumes:
+      - name: media
+        persistentVolumeClaim:
+          claimName: media-pvc
+---
+# Frontend Next.js
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: medecin-africa
+spec:
+  template:
+    spec:
+      containers:
+      - name: nextjs
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "512Mi"
+            ephemeral-storage: "512Mi"
+          limits:
+            cpu: "1000m"
+            memory: "1Gi"
+            ephemeral-storage: "1Gi"
+---
+# Base de données PostgreSQL
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: medecin-africa
+spec:
+  template:
+    spec:
+      containers:
+      - name: postgres
+        resources:
+          requests:
+            cpu: "1000m"
+            memory: "2Gi"
+            ephemeral-storage: "10Gi"
+          limits:
+            cpu: "4000m"
+            memory: "8Gi"
+            ephemeral-storage: "20Gi"
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 50Gi
+      storageClassName: "ssd"
+---
+# Cache Redis
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: medecin-africa
+spec:
+  template:
+    spec:
+      containers:
+      - name: redis
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "512Mi"
+            ephemeral-storage: "1Gi"
+          limits:
+            cpu: "1000m"
+            memory: "1Gi"
+            ephemeral-storage: "2Gi"
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+      volumes:
+      - name: redis-data
+        persistentVolumeClaim:
+          claimName: redis-pvc
+---
+# Elasticsearch
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch
+  namespace: medecin-africa
+spec:
+  serviceName: elasticsearch
+  replicas: 3
+  template:
+    spec:
+      containers:
+      - name: elasticsearch
+        resources:
+          requests:
+            cpu: "1000m"
+            memory: "4Gi"
+            ephemeral-storage: "10Gi"
+          limits:
+            cpu: "4000m"
+            memory: "8Gi"
+            ephemeral-storage: "20Gi"
+        volumeMounts:
+        - name: elasticsearch-data
+          mountPath: /usr/share/elasticsearch/data
+  volumeClaimTemplates:
+  - metadata:
+      name: elasticsearch-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 100Gi
+      storageClassName: "ssd"
+---
+# File d'attente Celery
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-worker
+  namespace: medecin-africa
+spec:
+  template:
+    spec:
+      containers:
+      - name: celery
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+            ephemeral-storage: "1Gi"
+          limits:
+            cpu: "2000m"
+            memory: "2Gi"
+            ephemeral-storage: "2Gi"
+---
+# Beat Celery pour les tâches planifiées
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-beat
+  namespace: medecin-africa
+spec:
+  template:
+    spec:
+      containers:
+      - name: celery-beat
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "512Mi"
+            ephemeral-storage: "512Mi"
+          limits:
+            cpu: "500m"
+            memory: "1Gi"
+            ephemeral-storage: "1Gi"
+---
+# Prometheus pour la surveillance
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  template:
+    spec:
+      containers:
+      - name: prometheus
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "2Gi"
+            ephemeral-storage: "10Gi"
+          limits:
+            cpu: "2000m"
+            memory: "4Gi"
+            ephemeral-storage: "20Gi"
+        volumeMounts:
+        - name: prometheus-data
+          mountPath: /prometheus
+      volumes:
+      - name: prometheus-data
+        persistentVolumeClaim:
+          claimName: prometheus-pvc
+---
+# Grafana pour la visualisation
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  template:
+    spec:
+      containers:
+      - name: grafana
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "512Mi"
+            ephemeral-storage: "1Gi"
+          limits:
+            cpu: "1000m"
+            memory: "2Gi"
+            ephemeral-storage: "2Gi"
+        volumeMounts:
+        - name: grafana-data
+          mountPath: /var/lib/grafana
+      volumes:
+      - name: grafana-data
+        persistentVolumeClaim:
+          claimName: grafana-pvc

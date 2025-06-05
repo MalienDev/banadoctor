@@ -1,0 +1,310 @@
+---
+# Installation de la stack Loki avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: loki-stack
+  namespace: logging
+spec:
+  repo: https://grafana.github.io/helm-charts
+  chart: loki-stack
+  version: "2.9.10"
+  targetNamespace: logging
+  valuesContent: |-
+    # Configuration globale
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    
+    # Configuration de Loki
+    loki:
+      enabled: true
+      isDefault: true
+      persistence:
+        enabled: true
+        storageClassName: "ssd"
+        accessModes:
+          - ReadWriteOnce
+        size: 50Gi
+      config:
+        auth_enabled: false
+        ingester:
+          chunk_idle_period: 3m
+          chunk_block_size: 262144
+          chunk_retain_period: 1m
+          max_transfer_retries: 0
+          lifecycler:
+            ring:
+              kvstore:
+                store: inmemory
+              replication_factor: 1
+              heartbeat_timeout: 1m
+        limits_config:
+          enforce_metric_name: false
+          reject_old_samples: true
+          reject_old_samples_max_age: 168h
+          max_entries_limit_per_query: 5000
+          retention_period: 744h  # 31 jours
+          max_query_parallelism: 32
+          max_query_series: 5000
+        schema_config:
+          configs:
+          - from: 2020-10-24
+            store: boltdb-shipper
+            object_store: filesystem
+            schema: v11
+            index:
+              prefix: index_
+              period: 24h
+        server:
+          http_listen_port: 3100
+        storage_config:
+          boltdb_shipper:
+            active_index_directory: /loki/boltdb-shipper-active
+            cache_location: /loki/boltdb-shipper-cache
+            cache_ttl: 24h
+            shared_store: filesystem
+          filesystem:
+            directory: /loki/chunks
+        chunk_store_config:
+          max_look_back_period: 0s
+        table_manager:
+          retention_deletes_enabled: true
+          retention_period: 744h  # 31 jours
+      resources:
+        limits:
+          cpu: 1000m
+          memory: 2Gi
+        requests:
+          cpu: 500m
+          memory: 1Gi
+    
+    # Configuration de Promtail
+    promtail:
+      enabled: true
+      config:
+        clients:
+          - url: http://loki:3100/loki/api/v1/push
+        snippets:
+          pipelineStages:
+            - docker: {}
+            - cri: {}
+            - match:
+                selector: '{app=~"banadoctor-.+"}'
+                stages:
+                  - regex:
+                      expression: '^(?P<timestamp>\S+) (?P<stream>stdout|stderr) (?P<logtag>[^ ]*) (?P<log>.*)'
+                  - labels:
+                      stream:
+                  - timestamp:
+                      format: time.RFC3339Nano
+                      source: timestamp
+                  - output:
+                      source: log
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+    
+    # Configuration de Grafana pour Loki
+    grafana:
+      enabled: true
+      sidecar:
+        datasources:
+          enabled: true
+          maxLines: 1000
+        dashboards:
+          enabled: true
+          label: grafana_dashboard
+      persistence:
+        enabled: true
+        storageClassName: "ssd"
+        accessModes: ["ReadWriteOnce"]
+        size: 10Gi
+      datasources:
+        datasources.yaml:
+          apiVersion: 1
+          datasources:
+          - name: Loki
+            type: loki
+            access: proxy
+            url: http://loki:3100
+            version: 1
+            editable: true
+            jsonData:
+              maxLines: 1000
+    
+    # Configuration de la journalisation des applications
+    extraObjects:
+      - apiVersion: monitoring.coreos.com/v1
+        kind: PodMonitor
+        metadata:
+          name: banadoctor-apps
+          namespace: logging
+          labels:
+            app: banadoctor
+            release: loki-stack
+        spec:
+          namespaceSelector:
+            matchNames:
+              - medecin-africa
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: banadoctor
+          podMetricsEndpoints:
+            - port: http-metrics
+              path: /metrics
+              interval: 15s
+          relabelings:
+            - sourceLabels: [__meta_kubernetes_pod_container_name]
+              targetLabel: container
+            - sourceLabels: [__meta_kubernetes_pod_node_name]
+              targetLabel: node
+            - sourceLabels: [__meta_kubernetes_namespace]
+              targetLabel: namespace
+            - sourceLabels: [__meta_kubernetes_pod_name]
+              targetLabel: pod
+    
+    # Configuration des règles d'alerte pour les logs
+    extraScrapeConfigs: |
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_kubernetes_io_config_maps_update_checksum]
+            action: drop
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: kubernetes_pod_name
+    
+    # Configuration des tableaux de bord Grafana pour les logs
+    dashboardProviders:
+      dashboardproviders.yaml:
+        apiVersion: 1
+        providers:
+        - name: 'loki'
+          orgId: 1
+          folder: 'Loki'
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /etc/grafana/provisioning/dashboards/loki
+    
+    dashboards:
+      default:
+        loki-logs:
+          gnetId: 13439
+          revision: 1
+          datasource: Loki
+        kubernetes-logs:
+          gnetId: 13639
+          revision: 1
+          datasource: Loki
+        application-logs:
+          gnetId: 10413
+          revision: 1
+          datasource: Loki
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: 500m
+        memory: 1Gi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+    
+    # Configuration de la rétention des logs
+    retentionConfig:
+      retention_period: 744h  # 31 jours
+      delete_worker_count: 150
+      retention_delete_delay: 10s
+      retention_delete_worker_count: 150
+    
+    # Configuration du stockage
+    storage:
+      type: 'filesystem'
+      filesystem:
+        directory: '/loki'
+    
+    # Configuration du cache
+    cache:
+      enabled: true
+      config:
+        embedded_cache:
+          enabled: true
+          max_size_mb: 1000
+    
+    # Configuration de la compression
+    chunk_encoding: snappy
+    
+    # Configuration de la réplication
+    replication_factor: 1
+    
+    # Configuration du hachage des anneaux
+    ring:
+      kvstore:
+        store: inmemory
+      replication_factor: 1
+    
+    # Configuration du schéma
+    schema_config:
+      configs:
+      - from: 2020-10-24
+        store: boltdb-shipper
+        object_store: filesystem
+        schema: v11
+        index:
+          prefix: index_
+          period: 24h
+    
+    # Configuration du serveur
+    server:
+      http_listen_port: 3100
+      grpc_listen_port: 9095
+    
+    # Configuration du stockage
+    storage_config:
+      boltdb_shipper:
+        active_index_directory: /loki/boltdb-shipper-active
+        cache_location: /loki/boltdb-shipper-cache
+        cache_ttl: 24h
+        shared_store: filesystem
+      filesystem:
+        directory: /loki/chunks
+    
+    # Configuration du gestionnaire de tables
+    table_manager:
+      retention_deletes_enabled: true
+      retention_period: 744h  # 31 jours
+    
+    # Configuration des limites
+    limits_config:
+      enforce_metric_name: false
+      reject_old_samples: true
+      reject_old_samples_max_age: 168h
+      max_entries_limit_per_query: 5000
+      retention_period: 744h  # 31 jours
+      max_query_parallelism: 32
+      max_query_series: 5000

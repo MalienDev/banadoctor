@@ -1,0 +1,197 @@
+---
+# Installation d'Apache Ignite avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: ignite
+  namespace: cache
+spec:
+  repo: https://apache.github.io/ignite-helm-charts
+  chart: ignite
+  version: "0.7.0"
+  targetNamespace: cache
+  valuesContent: |-
+    # Configuration de base
+    image:
+      repository: apacheignite/ignite
+      tag: 2.13.0
+      pullPolicy: IfNotPresent
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: 2
+        memory: 4Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    
+    # Configuration du nombre de répliques
+    replicaCount: 3
+    
+    # Configuration de la persistance
+    persistence:
+      enabled: true
+      storageClass: "ssd"
+      size: 50Gi
+      accessModes:
+        - ReadWriteOnce
+    
+    # Configuration du cluster
+    cluster:
+      # Configuration du mode
+      mode: "cluster"
+      # Configuration de la persistance
+      persistence:
+        enabled: true
+        storageClass: "ssd"
+        size: 50Gi
+      # Configuration de la haute disponibilité
+      ha:
+        enabled: true
+        restartPolicy: Always
+      # Configuration du service
+      service:
+        type: ClusterIP
+        ports:
+          rest: 8080
+          jdbc: 10800
+          sql: 10801
+          thin: 10802
+          jmx: 49112
+      # Configuration des propriétés
+      configuration: |
+        <?xml version="1.0" encoding="UTF-8"?>
+        <beans xmlns="http://www.springframework.org/schema/beans"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+               xsi:schemaLocation="
+                   http://www.springframework.org/schema/beans
+                   http://www.springframework.org/schema/beans/spring-beans.xsd">
+            <bean class="org.apache.ignite.configuration.IgniteConfiguration">
+                <!-- Configuration de la découverte -->
+                <property name="discoverySpi">
+                    <bean class="org.apache.ignite.spi.discovery.kubernetes.KubernetesIpFinder">
+                        <property name="namespace" value="cache"/>
+                        <property name="serviceName" value="ignite"/>
+                    </bean>
+                </property>
+                <!-- Configuration du cache -->
+                <property name="cacheConfiguration">
+                    <list>
+                        <bean class="org.apache.ignite.configuration.CacheConfiguration">
+                            <property name="name" value="default"/>
+                            <property name="cacheMode" value="PARTITIONED"/>
+                            <property name="backups" value="2"/>
+                            <property name="atomicityMode" value="ATOMIC"/>
+                            <property name="writeSynchronizationMode" value="PRIMARY_SYNC"/>
+                        </bean>
+                    </list>
+                </property>
+                <!-- Configuration de la mémoire -->
+                <property name="dataStorageConfiguration">
+                    <bean class="org.apache.ignite.configuration.DataStorageConfiguration">
+                        <property name="defaultDataRegionConfiguration">
+                            <bean class="org.apache.ignite.configuration.DataRegionConfiguration">
+                                <property name="persistenceEnabled" value="true"/>
+                                <property name="initialSize" value="#256L * 1024 * 1024"/>
+                                <property name="maxSize" value="#2L * 1024 * 1024 * 1024"/>
+                            </bean>
+                        </property>
+                    </bean>
+                </property>
+            </bean>
+        </beans>
+    
+    # Configuration de la surveillance
+    monitoring:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        additionalLabels:
+          release: kube-prometheus-stack
+    
+    # Configuration de la journalisation
+    logging:
+      enabled: true
+      fluentbit:
+        enabled: true
+        config:
+          inputs: |
+            [INPUT]
+                Name              tail
+                Tag               ignite.*
+                Path              /opt/ignite/work/log/ignite-*.log
+                Parser            json
+                Refresh_Interval  5
+                Mem_Buf_Limit     5MB
+                Skip_Long_Lines   On
+          outputs: |
+            [OUTPUT]
+                Name  loki
+                Match *
+                Host  loki.monitoring.svc
+                Port  3100
+                Labels job=ignite
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - ignite
+            topologyKey: "kubernetes.io/hostname"
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Configuration de la politique réseau pour Apache Ignite
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-ignite-traffic
+  namespace: cache
+spec:
+  description: "Allow traffic to Apache Ignite"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: ignite
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: banadoctor-backend
+    toPorts:
+    - ports:
+      - port: "8080"
+        protocol: TCP
+      - port: "10800-10802"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: ignite
+    toPorts:
+    - ports:
+      - port: "47100"
+        protocol: TCP
+      - port: "47101"
+        protocol: TCP
+      - port: "47500"
+        protocol: TCP
+      - port: "47501"
+        protocol: TCP
+  egress: []

@@ -1,0 +1,449 @@
+---
+# Installation de l'opérateur MinIO avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: minio-operator
+  namespace: minio-operator
+spec:
+  repo: https://operator.min.io/
+  chart: minio-operator
+  version: "5.0.6"
+  targetNamespace: minio-operator
+  createNamespace: true
+  valuesContent: |-
+    # Configuration de base
+    image:
+      repository: minio/operator
+      tag: v5.0.6
+      pullPolicy: IfNotPresent
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: 1
+        memory: 1Gi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+    
+    # Configuration de la console MinIO
+    console:
+      enabled: true
+      image:
+        repository: minio/console
+        tag: v0.20.3
+        pullPolicy: IfNotPresent
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 50m
+          memory: 128Mi
+      
+      # Configuration du service
+      service:
+        type: LoadBalancer
+        port: 9001
+        nodePort: 30443
+      
+      # Configuration de l'ingress
+      ingress:
+        enabled: true
+        ingressClassName: nginx
+        host: console.minio.banadoctor.com
+        annotations:
+          nginx.ingress.kubernetes.io/proxy-body-size: "0"
+          nginx.ingress.kubernetes.io/proxy-read-timeout: "900"
+          nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
+          nginx.ingress.kubernetes.io/configuration-snippet: |
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      
+      # Configuration TLS
+      tls:
+        enabled: true
+        secretName: minio-console-tls
+    
+    # Configuration de l'opérateur
+    operator:
+      # Configuration des ressources
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 50m
+          memory: 128Mi
+      
+      # Configuration de la haute disponibilité
+      replicaCount: 2
+      
+      # Configuration des tolérances
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+    
+    # Configuration de la console
+    console:
+      # Configuration des ressources
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 50m
+          memory: 128Mi
+      
+      # Configuration de la haute disponibilité
+      replicaCount: 2
+      
+      # Configuration des tolérances
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+    
+    # Configuration de la surveillance
+    monitoring:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        namespace: monitoring
+        additionalLabels:
+          release: kube-prometheus-stack
+    
+    # Configuration de la journalisation
+    logLevel: info
+    
+    # Configuration des fonctionnalités expérimentales
+    featureGates:
+      # Activer les fonctionnalités expérimentales
+      tenantWebhook: true
+      bucketDns: true
+      serviceMonitor: true
+    
+    # Configuration de la sécurité
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 3000
+      fsGroup: 2000
+    
+    # Configuration des affinités
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Configuration du tenant MinIO
+apiVersion: minio.min.io/v2
+kind: Tenant
+metadata:
+  name: banadoctor
+  namespace: minio-operator
+  labels:
+    app: minio
+    tenant: banadoctor
+spec:
+  # Configuration de l'image
+  image: minio/minio:RELEASE.2023-01-25T00-19-54Z
+  imagePullPolicy: IfNotPresent
+  
+  # Configuration des ressources
+  resources:
+    requests:
+      memory: "4Gi"
+      cpu: "2"
+    limits:
+      memory: "8Gi"
+      cpu: "4"
+  
+  # Configuration du stockage
+  pools:
+    - servers: 4
+      volumesPerServer: 4
+      volumeClaimTemplate:
+        metadata:
+          name: data
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 100Gi
+          storageClassName: local-storage
+  
+  # Configuration des services
+  services:
+    console:
+      enabled: true
+      externalPort: 9000
+      console:
+        enabled: true
+        externalPort: 9001
+  
+  # Configuration des clés d'accès
+  credentials:
+    name: minio-credentials
+    secret:
+      name: minio-credentials
+  
+  # Configuration des environnements
+  env:
+    - name: MINIO_BROWSER_REDIRECT_URL
+      value: "https://console.minio.banadoctor.com"
+    - name: MINIO_SERVER_URL
+      value: "https://minio.banadoctor.com"
+    - name: MINIO_BROWSER_SESSION_DURATION
+      value: "24h"
+    - name: MINIO_BROWSER_SESSION_REFRESH
+      value: "1h"
+  
+  # Configuration des annotations
+  annotations:
+    # Configuration pour Prometheus
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9000"
+    prometheus.io/path: "/minio/v2/metrics/cluster"
+  
+  # Configuration des tolérances
+  tolerations:
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
+  
+  # Configuration des affinités
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node-role.kubernetes.io/storage
+                operator: In
+                values:
+                  - "true"
+---
+# Configuration du secret pour les identifiants MinIO
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-credentials
+  namespace: minio-operator
+type: Opaque
+data:
+  # Les identifiants doivent être encodés en base64
+  # Exemple: echo -n 'minioadmin' | base64
+  accesskey: bWluaW9hZG1pbg==  # minioadmin
+  secretkey: bWluaW9hZG1pbg==  # minioadmin
+---
+# Configuration de l'ingress pour l'API MinIO
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: minio
+  namespace: minio-operator
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "900"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: minio.banadoctor.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: minio
+                port:
+                  number: 9000
+  tls:
+    - hosts:
+        - minio.banadoctor.com
+      secretName: minio-tls
+---
+# Configuration de l'ingress pour la console MinIO
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: minio-console
+  namespace: minio-operator
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "900"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: console.minio.banadoctor.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: minio-console
+                port:
+                  number: 9001
+  tls:
+    - hosts:
+        - console.minio.banadoctor.com
+      secretName: minio-console-tls
+---
+# Configuration du bucket pour les sauvegardes
+apiVersion: minio.min.io/v2
+kind: Bucket
+metadata:
+  name: backups
+  namespace: minio-operator
+  labels:
+    app: minio
+    tenant: banadoctor
+spec:
+  # Configuration des règles de rétention
+  retention:
+    mode: compliance
+    validity: 30d
+    unit: days
+  
+  # Configuration des règles de réplication
+  replication:
+    enabled: true
+    rules:
+      - id: backup-replication
+        prefix: "backups/"
+        target:
+          bucket: "arn:minio:replication::backups:replication"
+  
+  # Configuration des notifications
+  notifications:
+    topic: backup-notifications
+    events:
+      - s3:ObjectCreated:Put
+      - s3:ObjectCreated:Post
+      - s3:ObjectCreated:Copy
+      - s3:ObjectRemoved:Delete
+    queue: backup-queue
+---
+# Configuration de l'utilisateur pour les sauvegardes
+apiVersion: minio.min.io/v2
+kind: User
+metadata:
+  name: backup-user
+  namespace: minio-operator
+  labels:
+    app: minio
+    tenant: banadoctor
+spec:
+  groups:
+    - backup-group
+  policies:
+    - readwrite:backups
+  secret:
+    name: backup-credentials
+---
+# Configuration du groupe pour les sauvegardes
+apiVersion: minio.min.io/v2
+kind: Group
+metadata:
+  name: backup-group
+  namespace: minio-operator
+  labels:
+    app: minio
+    tenant: banadoctor
+spec:
+  members:
+    - backup-user
+  policies:
+    - readwrite:backups
+---
+# Configuration de la politique pour les sauvegardes
+apiVersion: minio.min.io/v2
+kind: Policy
+metadata:
+  name: readwrite:backups
+  namespace: minio-operator
+  labels:
+    app: minio
+    tenant: banadoctor
+policy: |
+  {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "s3:ListBucket"
+        ],
+        "Resource": [
+          "arn:aws:s3:::backups"
+        ]
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "s3:PutObject",
+          "s3:GetObject",
+          "s3:DeleteObject"
+        ],
+        "Resource": [
+          "arn:aws:s3:::backups/*"
+        ]
+      }
+    ]
+  }
+---
+# Configuration du secret pour les identifiants de sauvegarde
+apiVersion: v1
+kind: Secret
+metadata:
+  name: backup-credentials
+  namespace: minio-operator
+type: Opaque
+data:
+  # Les identifiants doivent être encodés en base64
+  # Exemple: echo -n 'backup-user' | base64
+  accesskey: YmFja3VwLXVzZXI=  # backup-user
+  secretkey: YmFja3VwLXBhc3N3b3Jk  # backup-password
+---
+# Configuration du service pour la surveillance
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: minio
+  namespace: minio-operator
+  labels:
+    app: minio
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: minio
+  endpoints:
+    - port: http
+      path: /minio/v2/metrics/cluster
+      interval: 30s
+      scrapeTimeout: 10s
+  namespaceSelector:
+    matchNames:
+      - minio-operator

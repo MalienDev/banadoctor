@@ -1,0 +1,281 @@
+---
+# Installation de PostgreSQL avec réplication en haute disponibilité
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: postgresql-ha
+  namespace: postgresql
+spec:
+  repo: https://charts.bitnami.com/bitnami
+  chart: postgresql-ha
+  version: "10.5.0"
+  targetNamespace: postgresql
+  createNamespace: true
+  valuesContent: |-
+    # Configuration de base
+    image:
+      registry: docker.io
+      repository: bitnami/postgresql-repmgr
+      tag: 14.6.0-debian-11-r0
+      pullPolicy: IfNotPresent
+    
+    # Configuration du nombre de répliques
+    postgresql:
+      replicaCount: 3
+      
+      # Configuration des ressources
+      resources:
+        limits:
+          cpu: 2
+          memory: 4Gi
+        requests:
+          cpu: 500m
+          memory: 1Gi
+      
+      # Configuration de la persistance
+      persistence:
+        enabled: true
+        storageClass: "ssd"
+        size: 50Gi
+        accessModes:
+          - ReadWriteOnce
+      
+      # Configuration de la base de données
+      database: banadoctor
+      username: postgres
+      password: "${POSTGRES_PASSWORD}
+      postgresPassword: "${POSTGRES_ADMIN_PASSWORD}
+      
+      # Configuration de la réplication
+      repmgrUsername: repmgr
+      repmgrPassword: "${REPMGR_PASSWORD}
+      repmgrLogLevel: INFO
+      
+      # Configuration des paramètres PostgreSQL
+      postgresqlSharedBuffers: 1GB
+      postgresqlMaxConnections: "200"
+      postgresqlMaxPreparedTransactions: "100"
+      postgresqlWorkMem: "32MB"
+      postgresqlMaintenanceWorkMem: "256MB"
+      postgresqlEffectiveCacheSize: "2GB"
+      postgresqlCheckpointCompletionTarget: "0.9"
+      postgresqlWalBuffers: "16MB"
+      postgresqlMinWalSize: "2GB"
+      postgresqlMaxWalSize: "4GB"
+      postgresqlWalKeepSegments: "32"
+      postgresqlMaxWalSenders: "10"
+      postgresqlMaxReplicationSlots: "10"
+      postgresqlWalLevel: "replica"
+      postgresqlHotStandby: "on"
+      postgresqlMaxWorkerProcesses: "8"
+      postgresqlMaxParallelWorkers: "4"
+      postgresqlMaxParallelWorkersPerGather: "2"
+      postgresqlSharedPreloadLibraries: "pg_stat_statements,auto_explain"
+      
+      # Configuration des extensions
+      extensions:
+        - name: "pg_stat_statements"
+        - name: "pgcrypto"
+        - name: "uuid-ossp"
+        - name: "hstore"
+        - name: "postgis"
+    
+    # Configuration de PgBouncer
+    pgbouncer:
+      enabled: true
+      replicaCount: 2
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      
+      # Configuration de la persistance
+      persistence:
+        enabled: true
+        storageClass: "ssd"
+        size: 10Gi
+    
+    # Configuration de la surveillance
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        additionalLabels:
+          release: kube-prometheus-stack
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - postgresql-ha
+            topologyKey: "kubernetes.io/hostname"
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Configuration de la sauvegarde de PostgreSQL avec pgBackRest
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: postgresql-backup
+  namespace: postgresql
+spec:
+  repo: https://charts.bitnami.com/bitnami
+  chart: postgresql
+  version: "11.9.10"
+  targetNamespace: postgresql
+  valuesContent: |-
+    # Configuration de base
+    image:
+      registry: docker.io
+      repository: bitnami/postgresql
+      tag: 14.6.0-debian-11-r0
+      pullPolicy: IfNotPresent
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: 500m
+        memory: 1Gi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+    
+    # Configuration de la persistance
+    persistence:
+      enabled: true
+      storageClass: "ssd"
+      size: 10Gi
+    
+    # Configuration de la base de données
+    postgresqlUsername: postgres
+    postgresqlPassword: "${POSTGRES_ADMIN_PASSWORD}
+    postgresqlDatabase: banadoctor
+    
+    # Configuration de pgBackRest
+    pgbackrest:
+      enabled: true
+      repository:
+        - name: local
+          volume:
+            size: 50Gi
+            storageClass: "ssd"
+      retention: "7"
+      schedule: "0 0 * * *"
+      resources:
+        limits:
+          cpu: 500m
+          memory: 1Gi
+        requests:
+          cpu: 100m
+          memory: 256Mi
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+---
+# Configuration des secrets pour PostgreSQL
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgresql-secrets
+  namespace: postgresql
+type: Opaque
+data:
+  postgres-password: ${BASE64_POSTGRES_PASSWORD}
+  postgres-postgres-password: ${BASE64_POSTGRES_ADMIN_PASSWORD}
+  repmgr-password: ${BASE64_REPMGR_PASSWORD}
+---
+# Configuration de la politique réseau pour PostgreSQL
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-postgresql-traffic
+  namespace: postgresql
+spec:
+  description: "Allow traffic to PostgreSQL"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql-ha
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: banadoctor-backend
+    toPorts:
+    - ports:
+      - port: "5432"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: postgresql-ha
+    toPorts:
+    - ports:
+      - port: "5432"
+        protocol: TCP
+      - port: "5433"
+        protocol: TCP
+  egress: []
+---
+# Configuration de la politique réseau pour PgBouncer
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-pgbouncer-traffic
+  namespace: postgresql
+spec:
+  description: "Allow traffic to PgBouncer"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: pgbouncer
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: banadoctor-backend
+    toPorts:
+    - ports:
+      - port: "6432"
+        protocol: TCP
+  egress: []
+---
+# Configuration de la politique réseau pour les sauvegardes
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-postgresql-backup-traffic
+  namespace: postgresql
+spec:
+  description: "Allow backup traffic for PostgreSQL"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql-ha
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: postgresql-backup
+    toPorts:
+    - ports:
+      - port: "5432"
+        protocol: TCP
+  egress: []

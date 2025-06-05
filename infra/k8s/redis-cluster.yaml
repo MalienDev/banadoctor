@@ -1,0 +1,191 @@
+---
+# Installation de Redis avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: redis
+  namespace: redis
+spec:
+  repo: https://charts.bitnami.com/bitnami
+  chart: redis
+  version: "17.3.2"
+  targetNamespace: redis
+  createNamespace: true
+  valuesContent: |-
+    # Configuration de base
+    image:
+      registry: docker.io
+      repository: bitnami/redis
+      tag: 7.0.10-debian-11-r0
+      pullPolicy: IfNotPresent
+    
+    # Configuration de l'architecture
+    architecture: replication
+    
+    # Configuration du nombre de répliques
+    replica:
+      replicaCount: 3
+      configuration: |
+        maxmemory 2gb
+        maxmemory-policy allkeys-lru
+        save ""
+        appendonly yes
+        appendfsync everysec
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: 2
+        memory: 4Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    
+    # Configuration de la persistance
+    persistence:
+      enabled: true
+      storageClass: "ssd"
+      size: 20Gi
+      accessModes:
+        - ReadWriteOnce
+    
+    # Configuration de la sécurité
+    auth:
+      enabled: true
+      sentinel: true
+      password: "${REDIS_PASSWORD}"
+    
+    # Configuration de la surveillance
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        additionalLabels:
+          release: kube-prometheus-stack
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - redis
+            topologyKey: "kubernetes.io/hostname"
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Installation de Redis Exporter pour la surveillance
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: redis-exporter
+  namespace: redis
+spec:
+  repo: https://prometheus-community.github.io/helm-charts
+  chart: prometheus-redis-exporter
+  version: "6.0.0"
+  targetNamespace: redis
+  valuesContent: |-
+    # Configuration de base
+    image:
+      repository: oliver006/redis_exporter
+      tag: v1.45.0
+      pullPolicy: IfNotPresent
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: 100m
+        memory: 128Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi
+    
+    # Configuration de la connexion Redis
+    redisAddress: "redis://redis-master.redis.svc.cluster.local:6379"
+    redisPassword:
+      enabled: true
+      secret:
+        name: redis
+        key: redis-password
+    
+    # Configuration de la surveillance
+    serviceMonitor:
+      enabled: true
+      additionalLabels:
+        release: kube-prometheus-stack
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+---
+# Configuration de la politique réseau pour Redis
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-redis-traffic
+  namespace: redis
+spec:
+  description: "Allow traffic to Redis"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: banadoctor-backend
+    toPorts:
+    - ports:
+      - port: "6379"
+        protocol: TCP
+  egress: []
+---
+# Configuration de la politique réseau pour Redis Exporter
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-redis-exporter-traffic
+  namespace: redis
+spec:
+  description: "Allow traffic to Redis Exporter"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis-exporter
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: prometheus-operator
+    toPorts:
+    - ports:
+      - port: "9121"
+        protocol: TCP
+  egress: []
+---
+# Configuration des secrets pour Redis
+apiVersion: v1
+kind: Secret
+metadata:
+  name: redis-secrets
+  namespace: redis
+type: Opaque
+data:
+  redis-password: ${BASE64_REDIS_PASSWORD}
+  redis-replication-password: ${BASE64_REDIS_REPLICATION_PASSWORD}

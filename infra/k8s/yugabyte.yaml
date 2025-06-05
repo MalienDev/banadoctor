@@ -1,0 +1,181 @@
+---
+# Installation de YugabyteDB avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: yugabyte
+  namespace: distributed-db
+spec:
+  repo: https://charts.yugabyte.com
+  chart: yugabyte
+  version: "2.17.0"
+  targetNamespace: distributed-db
+  createNamespace: true
+  valuesContent: |-
+    # Configuration de base
+    image:
+      repository: yugabytedb/yugabyte
+      tag: "2.17.1.0-b175"
+      pullPolicy: IfNotPresent
+    
+    # Configuration des ressources
+    resource:
+      master:
+        requests:
+          cpu: 1
+          memory: 2Gi
+      tserver:
+        requests:
+          cpu: 2
+          memory: 4Gi
+    
+    # Configuration du nombre de répliques
+    replicas:
+      master: 3
+      tserver: 3
+    
+    # Configuration de la persistance
+    persistence:
+      enabled: true
+      storageClass: "ssd"
+      accessModes: ["ReadWriteOnce"]
+      size: 50Gi
+    
+    # Configuration de l'authentification
+    auth:
+      enabled: true
+      credentials:
+        adminUsername: "yugabyte"
+        adminPassword: "${YUGABYTE_ADMIN_PASSWORD}
+        ysqlUsername: "yugabyte"
+        ysqlPassword: "${YUGABYTE_YSQL_PASSWORD}
+        ycqlUsername: "yugabyte"
+        ycqlPassword: "${YUGABYTE_YCQL_PASSWORD}
+    
+    # Configuration du service
+    service:
+      type: ClusterIP
+      ports:
+        master:
+          ui: 7000
+          rpc: 7100
+        tserver:
+          pgsql: 5433
+          cql: 9042
+          redis: 6379
+    
+    # Configuration des paramètres YB-Master
+    master:
+      gflags:
+        logtostderr: "true"
+        v: "0"
+        use_node_hostname_for_local_tserver: "true"
+        rpc_bind_addresses: "0.0.0.0"
+        master_rpc_timeout_ms: "30000"
+        webserver_port: "7000"
+        webserver_interface: "0.0.0.0"
+        rpc_bind_addresses: "0.0.0.0:7100"
+        master_addresses: "yugabyte-master-0.yugabyte-master-headless.distributed-db.svc.cluster.local:7100,yugabyte-master-1.yugabyte-master-headless.distributed-db.svc.cluster.local:7100,yugabyte-master-2.yugabyte-master-headless.distributed-db.svc.cluster.local:7100"
+    
+    # Configuration des paramètres YB-TServer
+    tserver:
+      gflags:
+        logtostderr: "true"
+        v: "0"
+        use_node_hostname_for_local_tserver: "true"
+        rpc_bind_addresses: "0.0.0.0"
+        tserver_master_replication_factor: "3"
+        tserver_master_addrs: "yugabyte-master-0.yugabyte-master-headless.distributed-db.svc.cluster.local:7100,yugabyte-master-1.yugabyte-master-headless.distributed-db.svc.cluster.local:7100,yugabyte-master-2.yugabyte-master-headless.distributed-db.svc.cluster.local:7100"
+        pgsql_proxy_bind_address: "0.0.0.0:5433"
+        cql_proxy_bind_address: "0.0.0.0:9042"
+        redis_proxy_bind_address: "0.0.0.0:6379"
+        webserver_port: "9000"
+        webserver_interface: "0.0.0.0"
+        rpc_bind_addresses: "0.0.0.0:9100"
+        yb_enable_read_committed_isolation: "true"
+        ysql_enable_packed_row: "true"
+        ysql_enable_packed_row_for_colocated_table: "true"
+        ysql_pg_conf_csv: "shared_preload_libraries=pg_stat_statements,auto_explain,pg_hint_plan;max_connections=300;shared_buffers=1GB;work_mem=32MB;maintenance_work_mem=256MB;effective_cache_size=2GB;random_page_cost=1.1;effective_io_concurrency=200;max_parallel_workers_per_gather=2;max_parallel_workers=4;max_worker_processes=8;max_wal_size=4GB;min_wal_size=2GB;checkpoint_completion_target=0.9;wal_buffers=16MB;default_statistics_target=500"
+    
+    # Configuration de la surveillance
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        additionalLabels:
+          release: kube-prometheus-stack
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - yugabyte
+            topologyKey: "kubernetes.io/hostname"
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Configuration de la politique réseau pour YugabyteDB
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-yugabyte-traffic
+  namespace: distributed-db
+spec:
+  description: "Allow traffic to YugabyteDB"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: yugabyte
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: banadoctor-backend
+    toPorts:
+    - ports:
+      - port: "5433"
+        protocol: TCP
+      - port: "9042"
+        protocol: TCP
+      - port: "6379"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: yugabyte
+    toPorts:
+    - ports:
+      - port: "7100"
+        protocol: TCP
+      - port: "7000"
+        protocol: TCP
+      - port: "9000"
+        protocol: TCP
+  egress: []
+---
+# Configuration des secrets pour YugabyteDB
+apiVersion: v1
+kind: Secret
+metadata:
+  name: yugabyte-secrets
+  namespace: distributed-db
+type: Opaque
+data:
+  admin-password: ${BASE64_YUGABYTE_ADMIN_PASSWORD}
+  ysql-password: ${BASE64_YUGABYTE_YSQL_PASSWORD}
+  ycql-password: ${BASE64_YUGABYTE_YCQL_PASSWORD}

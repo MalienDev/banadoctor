@@ -1,0 +1,177 @@
+---
+# Installation de RabbitMQ avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: rabbitmq
+  namespace: messaging
+spec:
+  repo: https://charts.bitnami.com/bitnami
+  chart: rabbitmq
+  version: "11.4.0"
+  targetNamespace: messaging
+  createNamespace: true
+  valuesContent: |-
+    # Configuration de base
+    image:
+      registry: docker.io
+      repository: bitnami/rabbitmq
+      tag: 3.11.13-debian-11-r0
+      pullPolicy: IfNotPresent
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: 2
+        memory: 4Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    
+    # Configuration du nombre de répliques
+    replicaCount: 3
+    
+    # Configuration de la persistance
+    persistence:
+      enabled: true
+      storageClass: "ssd"
+      size: 20Gi
+      accessModes:
+        - ReadWriteOnce
+    
+    # Configuration de l'authentification
+    auth:
+      username: admin
+      password: "${RABBITMQ_ADMIN_PASSWORD}
+      erlangCookie: "${RABBITMQ_ERLANG_COOKIE}
+    
+    # Configuration du service
+    service:
+      type: ClusterIP
+      ports:
+        amqp: 5672
+        manager: 15672
+        metrics: 9419
+    
+    # Configuration des plugins
+    extraPlugins: "rabbitmq_management,rabbitmq_management_agent,rabbitmq_peer_discovery_k8s,rabbitmq_prometheus"
+    
+    # Configuration des paramètres
+    configuration: |
+      default_user = admin
+      default_pass = ${RABBITMQ_ADMIN_PASSWORD}
+      default_vhost = /
+      disk_free_limit.absolute = 1GB
+      cluster_formation.peer_discovery_backend = rabbit_peer_discovery_k8s
+      cluster_formation.k8s.host = kubernetes.default.svc.cluster.local
+      cluster_formation.k8s.address_type = hostname
+      cluster_formation.node_cleanup.interval = 10
+      cluster_formation.node_cleanup.only_log_warning = false
+      cluster_partition_handling = autoheal
+      queue_master_locator=min-masters
+      channel_max = 2047
+      default_user_tags.administrator = true
+      default_permissions.configure = .*
+      default_permissions.read = .*
+      default_permissions.write = .*
+      vm_memory_high_watermark.relative = 0.6
+      vm_memory_high_watermark_paging_ratio = 0.5
+      disk_free_limit.relative = 2.0
+      log.console = true
+      log.console.level = info
+      log.file = false
+      log.file.rotation.date = $D0
+      log.file.rotation.size = 0
+      log.file.rotation.count = 1
+      log.exchange = true
+      log.exchange.level = info
+      log.connection = true
+      log.channel = true
+      log.federation = true
+      log.ldap = true
+      log.mirroring = true
+      log.queue = true
+      log.ra = true
+      log.stream = true
+    
+    # Configuration de la surveillance
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        additionalLabels:
+          release: kube-prometheus-stack
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - rabbitmq
+            topologyKey: "kubernetes.io/hostname"
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Configuration de la politique réseau pour RabbitMQ
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-rabbitmq-traffic
+  namespace: messaging
+spec:
+  description: "Allow traffic to RabbitMQ"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: rabbitmq
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: banadoctor-backend
+    toPorts:
+    - ports:
+      - port: "5672"
+        protocol: TCP
+      - port: "15672"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: rabbitmq
+    toPorts:
+    - ports:
+      - port: "4369"
+        protocol: TCP
+      - port: "5672"
+        protocol: TCP
+      - port: "15672"
+        protocol: TCP
+      - port: "25672"
+        protocol: TCP
+  egress: []
+---
+# Configuration des secrets pour RabbitMQ
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rabbitmq-secrets
+  namespace: messaging
+type: Opaque
+data:
+  rabbitmq-password: ${BASE64_RABBITMQ_ADMIN_PASSWORD}
+  rabbitmq-erlang-cookie: ${BASE64_RABBITMQ_ERLANG_COOKIE}

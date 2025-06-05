@@ -1,0 +1,117 @@
+---
+# Installation de Memcached avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: memcached
+  namespace: cache
+spec:
+  repo: https://charts.bitnami.com/bitnami
+  chart: memcached
+  version: "6.2.10"
+  targetNamespace: cache
+  createNamespace: true
+  valuesContent: |-
+    # Configuration de base
+    image:
+      registry: docker.io
+      repository: bitnami/memcached
+      tag: 1.6.18-debian-11-r0
+      pullPolicy: IfNotPresent
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: 1
+        memory: 2Gi
+      requests:
+        cpu: 100m
+        memory: 512Mi
+    
+    # Configuration des arguments
+    arguments:
+      - --verbose
+      - --max-item-size=4m
+      - --conn-limit=1024
+      - --max-reqs-per-event=200
+      - --disable-cas
+      - --enable-largepages
+    
+    # Configuration du nombre de répliques
+    replicaCount: 3
+    
+    # Configuration de la persistance
+    persistence:
+      enabled: true
+      storageClass: "ssd"
+      size: 10Gi
+      accessModes:
+        - ReadWriteOnce
+    
+    # Configuration de la surveillance
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        additionalLabels:
+          release: kube-prometheus-stack
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: app.kubernetes.io/name
+                    operator: In
+                    values:
+                      - memcached
+              topologyKey: "kubernetes.io/hostname"
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Configuration de la politique réseau pour Memcached
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-memcached-traffic
+  namespace: cache
+spec:
+  description: "Allow traffic to Memcached"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: memcached
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: banadoctor-backend
+    toPorts:
+    - ports:
+      - port: "11211"
+        protocol: TCP
+  egress: []
+---
+# Configuration des secrets pour Memcached
+apiVersion: v1
+kind: Secret
+metadata:
+  name: memcached-secrets
+  namespace: cache
+type: Opaque
+data:
+  memcached-password: ${BASE64_MEMCACHED_PASSWORD}

@@ -1,0 +1,175 @@
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: elasticsearch-backup
+  namespace: medecin-africa
+  labels:
+    app: elasticsearch-backup
+    component: backup
+spec:
+  # Exécution quotidienne à 3h du matin (une heure après la sauvegarde PostgreSQL)
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          # Utilisation d'un service account avec les bonnes permissions
+          serviceAccountName: elasticsearch-backup-sa
+          restartPolicy: OnFailure
+          containers:
+          - name: elasticsearch-backup
+            image: elasticsearch:7.10.2
+            # Installation des dépendances nécessaires
+            command: ["/bin/sh", "-c"]
+            args:
+            - |
+              # Installer les dépendances
+              apt-get update && apt-get install -y curl jq python3-pip && \
+              pip3 install awscli && \
+              # Installer le plugin S3 pour Elasticsearch
+              elasticsearch-plugin install --batch repository-s3 && \
+              # Exécuter le script de sauvegarde
+              /scripts/elasticsearch-backup.sh
+            # Montage du script de sauvegarde
+            volumeMounts:
+            - name: backup-scripts
+              mountPath: /scripts
+            - name: config
+              mountPath: /usr/share/elasticsearch/config/elasticsearch.yml
+              subPath: elasticsearch.yml
+            # Variables d'environnement
+            env:
+            - name: ELASTICSEARCH_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: elasticsearch-secrets
+                  key: host
+            - name: ELASTICSEARCH_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: elasticsearch-secrets
+                  key: port
+            - name: ELASTICSEARCH_USER
+              valueFrom:
+                secretKeyRef:
+                  name: elasticsearch-secrets
+                  key: username
+            - name: ELASTICSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: elasticsearch-secrets
+                  key: password
+            - name: S3_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: backup-config
+                  key: S3_BUCKET
+            - name: S3_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: backup-config
+                  key: S3_REGION
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: aws-credentials
+                  key: aws_access_key_id
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aws-credentials
+                  key: aws_secret_access_key
+            # Ressources allouées
+            resources:
+              limits:
+                cpu: "1000m"
+                memory: "2Gi"
+              requests:
+                cpu: "500m"
+                memory: "1Gi"
+          # Volumes
+          volumes:
+          - name: backup-scripts
+            configMap:
+              name: elasticsearch-backup-scripts
+              defaultMode: 0744
+          - name: config
+            configMap:
+              name: elasticsearch-config
+          # Tolerations pour les nœuds dédiés aux sauvegardes
+          tolerations:
+          - key: "backup"
+            operator: "Exists"
+            effect: "NoSchedule"
+          # Affinité pour les nœuds de sauvegarde
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - key: role
+                    operator: In
+                    values:
+                    - backup
+---
+# Configuration des scripts de sauvegarde Elasticsearch
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elasticsearch-backup-scripts
+  namespace: medecin-africa
+data:
+  elasticsearch-backup.sh: |
+    #!/bin/bash
+    # Le contenu du script sera monté depuis le fichier local
+---
+# Configuration Elasticsearch
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elasticsearch-config
+  namespace: medecin-africa
+data:
+  elasticsearch.yml: |
+    cluster.name: "docker-cluster"
+    network.host: 0.0.0.0
+    discovery.type: single-node
+    xpack.security.enabled: true
+    xpack.security.authc.api_key.enabled: true
+---
+# Service Account pour les sauvegardes Elasticsearch
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: elasticsearch-backup-sa
+  namespace: medecin-africa
+---
+# Rôle pour le service account de sauvegarde Elasticsearch
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: elasticsearch-backup-role
+  namespace: medecin-africa
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/exec", "pods/log"]
+  verbs: ["get", "list", "create", "delete"]
+- apiGroups: ["batch"]
+  resources: ["jobs", "cronjobs"]
+  verbs: ["get", "list", "watch", "create", "update", "delete"]
+---
+# Liaison du rôle au service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: elasticsearch-backup-role-binding
+  namespace: medecin-africa
+subjects:
+- kind: ServiceAccount
+  name: elasticsearch-backup-sa
+  namespace: medecin-africa
+roleRef:
+  kind: Role
+  name: elasticsearch-backup-role
+  apiGroup: rbac.authorization.k8s.io

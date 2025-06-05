@@ -1,0 +1,440 @@
+---
+# Configuration pour la surveillance avec Istio
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  namespace: istio-system
+  name: istio-control-plane
+spec:
+  profile: demo
+  meshConfig:
+    accessLogFile: /dev/stdout
+    enableTracing: true
+    defaultConfig:
+      holdApplicationUntilProxyStarts: true
+      proxyMetadata:
+        # Activer les métriques Prometheus
+        ISTIO_META_MESH_ID: "banadoctor-mesh"
+        # Configuration du tracing
+        TRUSTED_CA: "/etc/istio/certs/root-cert.pem"
+        CA_ADDR: "istiod.istio-system.svc:15012"
+        # Configuration du proxy
+        PROXY_CONFIG_XDS_AGENT: ""
+  components:
+    # Désactiver les composants non nécessaires
+    cni:
+      enabled: false
+    # Configuration de la télémesure
+    telemetry:
+      enabled: true
+      k8s:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 1Gi
+          limits:
+            cpu: 2000m
+            memory: 2Gi
+    # Configuration de la surveillance
+    monitoring:
+      enabled: true
+    # Configuration de la politique de sécurité
+    policy:
+      enabled: true
+    # Configuration du contrôleur d'entrée
+    ingressGateways:
+    - name: istio-ingressgateway
+      enabled: true
+      k8s:
+        service:
+          ports:
+          - port: 15021
+            targetPort: 15021
+            name: status-port
+          - port: 80
+            targetPort: 8080
+            name: http2
+          - port: 443
+            targetPort: 8443
+            name: https
+          - port: 15012
+            targetPort: 15012
+            name: tcp-istiod
+          - port: 15443
+            targetPort: 15443
+            name: tls
+    # Configuration du contrôleur de sortie
+    egressGateways:
+    - name: istio-egressgateway
+      enabled: true
+      k8s:
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+  # Configuration des addons
+  addonComponents:
+    grafana:
+      enabled: true
+    kiali:
+      enabled: true
+    prometheus:
+      enabled: true
+    tracing:
+      enabled: true
+  # Configuration des valeurs par défaut
+  values:
+    global:
+      # Configuration du proxy
+      proxy:
+        accessLogFile: /dev/stdout
+        accessLogEncoding: JSON
+        enableCoreDump: true
+        holdApplicationUntilProxyStarts: true
+      # Configuration du tracing
+      tracer:
+        zipkin:
+          address: zipkin.istio-system:9411
+    # Configuration de Kiali
+    kiali:
+      enabled: true
+      createDemoSecret: true
+      dashboard:
+        secretName: kiali
+        usernameKey: username
+        passphraseKey: passphrase
+      prometheusAddr: http://prometheus-k8s.monitoring.svc:9090
+      grafana:
+        enabled: true
+        url: http://grafana.monitoring.svc:3000
+      tracing:
+        enabled: true
+        in_cluster_url: http://tracing.istio-system.svc:80/jaeger
+    # Configuration de Grafana
+    grafana:
+      enabled: true
+      persistence:
+        enabled: true
+        storageClassName: "ssd"
+        accessModes: ["ReadWriteOnce"]
+        size: 10Gi
+    # Configuration de Prometheus
+    prometheus:
+      enabled: true
+      retention: 30d
+      scrapeInterval: 15s
+      nodeSelector:
+        kubernetes.io/os: linux
+      service:
+        nodePort:
+          enabled: false
+      prometheusSpec:
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              accessModes: ["ReadWriteOnce"]
+              storageClassName: "ssd"
+              resources:
+                requests:
+                  storage: 50Gi
+        resources:
+          requests:
+            cpu: 500m
+            memory: 2Gi
+          limits:
+            cpu: 2000m
+            memory: 4Gi
+    # Configuration du tracing
+    tracing:
+      enabled: true
+      provider: jaeger
+      jaeger:
+        template: production-elasticsearch
+        elasticsearch:
+          nodeCount: 1
+          storage:
+            storageClassName: "ssd"
+            size: 10Gi
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+---
+# Configuration pour la surveillance des services
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: stats-filter
+  namespace: istio-system
+spec:
+  configPatches:
+  - applyTo: NETWORK_FILTER
+    match:
+      context: SIDECAR_INBOUND
+      listener:
+        filterChain:
+          filter:
+            name: "envoy.http_connection_manager"
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: envoy.filters.http.wasm
+        typed_config:
+          "@type": type.googleapis.com/udpa.type.v1.TypedStruct
+          type_url: type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
+          value:
+            config:
+              configuration:
+                "@type": type.googleapis.com/google.protobuf.StringValue
+                value: |
+                  {
+                    "debug": "false",
+                    "stat_prefix": "istio"
+                  }
+              root_id: stats_inbound
+              vm_config:
+                code:
+                  local:
+                    inline_string: envoy.wasm.stats
+                runtime: envoy.wasm.runtime.null
+                vm_id: stats_inbound
+  - applyTo: NETWORK_FILTER
+    match:
+      context: SIDECAR_OUTBOUND
+      listener:
+        filterChain:
+          filter:
+            name: "envoy.http_connection_manager"
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: envoy.filters.http.wasm
+        typed_config:
+          "@type": type.googleapis.com/udpa.type.v1.TypedStruct
+          type_url: type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
+          value:
+            config:
+              configuration:
+                "@type": type.googleapis.com/google.protobuf.StringValue
+                value: |
+                  {
+                    "debug": "false",
+                    "stat_prefix": "istio"
+                  }
+              root_id: stats_outbound
+              vm_config:
+                code:
+                  local:
+                    inline_string: envoy.wasm.stats
+                runtime: envoy.wasm.runtime.null
+                vm_id: stats_outbound
+  - applyTo: NETWORK_FILTER
+    match:
+      context: GATEWAY
+      listener:
+        filterChain:
+          filter:
+            name: "envoy.http_connection_manager"
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: envoy.filters.http.wasm
+        typed_config:
+          "@type": type.googleapis.com/udpa.type.v1.TypedStruct
+          type_url: type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm
+          value:
+            config:
+              configuration:
+                "@type": type.googleapis.com/google.protobuf.StringValue
+                value: |
+                  {
+                    "debug": "false",
+                    "stat_prefix": "istio"
+                  }
+              root_id: stats_outbound
+              vm_config:
+                code:
+                  local:
+                    inline_string: envoy.wasm.stats
+                runtime: envoy.wasm.runtime.null
+                vm_id: stats_outbound
+---
+# Configuration pour la journalisation des accès
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: mesh-default
+  namespace: istio-system
+spec:
+  accessLogging:
+  - providers:
+    - name: envoy
+    match:
+      mode: SERVER_AND_CLIENT
+  tracing:
+  - providers:
+    - name: zipkin
+    randomSamplingPercentage: 100.0
+---
+# Configuration pour les métriques personnalisées
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: custom-metrics
+  namespace: istio-system
+spec:
+  metrics:
+  - providers:
+    - name: prometheus
+    overrides:
+    - match:
+        metric: REQUEST_COUNT
+      tagOverrides:
+        request_method:
+          value: request.method
+        request_path:
+          value: request.path
+        response_code:
+          value: response.code
+        destination_service:
+          value: destination.service.name
+        source_workload:
+          value: source.workload.name
+        destination_workload:
+          value: destination.workload.name
+        response_flags:
+          value: response.flags
+        grpc_response_status:
+          value: response.grpc_status
+        request_protocol:
+          value: request.protocol
+        response_size:
+          value: response.size
+        request_size:
+          value: request.size
+        connection_security_policy:
+          value: connection_security_policy
+    - match:
+        metric: REQUEST_DURATION
+      tagOverrides:
+        request_method:
+          value: request.method
+        request_path:
+          value: request.path
+        response_code:
+          value: response.code
+        destination_service:
+          value: destination.service.name
+        source_workload:
+          value: source.workload.name
+        destination_workload:
+          value: destination.workload.name
+        response_flags:
+          value: response.flags
+        grpc_response_status:
+          value: response.grpc_status
+        request_protocol:
+          value: request.protocol
+        connection_security_policy:
+          value: connection_security_policy
+    - match:
+        metric: REQUEST_SIZE
+      tagOverrides:
+        request_method:
+          value: request.method
+        request_path:
+          value: request.path
+        response_code:
+          value: response.code
+        destination_service:
+          value: destination.service.name
+        source_workload:
+          value: source.workload.name
+        destination_workload:
+          value: destination.workload.name
+        response_flags:
+          value: response.flags
+        grpc_response_status:
+          value: response.grpc_status
+        request_protocol:
+          value: request.protocol
+        connection_security_policy:
+          value: connection_security_policy
+    - match:
+        metric: RESPONSE_SIZE
+      tagOverrides:
+        request_method:
+          value: request.method
+        request_path:
+          value: request.path
+        response_code:
+          value: response.code
+        destination_service:
+          value: destination.service.name
+        source_workload:
+          value: source.workload.name
+        destination_workload:
+          value: destination.workload.name
+        response_flags:
+          value: response.flags
+        grpc_response_status:
+          value: response.grpc_status
+        request_protocol:
+          value: request.protocol
+        connection_security_policy:
+          value: connection_security_policy
+---
+# Configuration pour les tableaux de bord Grafana
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: grafana-dashboard
+  namespace: istio-system
+spec:
+  configPatches:
+  - applyTo: NETWORK_FILTER
+    match:
+      context: GATEWAY
+      listener:
+        portNumber: 15021
+        filterChain:
+          filter:
+            name: "envoy.http_connection_manager"
+    patch:
+      operation: MERGE
+      value:
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          route_config:
+            virtual_hosts:
+            - name: backend
+              domains: ["*"]
+              routes:
+              - match:
+                  prefix: "/grafana"
+                route:
+                  cluster: grafana
+                  prefix_rewrite: "/"
+  - applyTo: CLUSTER
+    patch:
+      operation: ADD
+      value:
+        name: grafana
+        type: STRICT_DNS
+        connect_timeout: 10s
+        lb_policy: ROUND_ROBIN
+        load_assignment:
+          cluster_name: grafana
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: grafana.monitoring.svc.cluster.local
+                    port_value: 3000

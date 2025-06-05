@@ -1,0 +1,328 @@
+---
+# Installation de Kong avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: kong
+  namespace: kong
+spec:
+  repo: https://charts.konghq.com
+  chart: kong
+  version: "2.19.0"
+  targetNamespace: kong
+  createNamespace: true
+  valuesContent: |-
+    # Configuration de base
+    image:
+      repository: kong
+      tag: "3.3.0"
+      pullPolicy: IfNotPresent
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: 1
+        memory: 1Gi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+    
+    # Configuration de la base de données
+    database: "postgres"
+    postgresql:
+      enabled: true
+      auth:
+        username: kong
+        password: ${KONG_PG_PASSWORD}
+        database: kong
+        postgresPassword: ${POSTGRES_PASSWORD}
+      primary:
+        persistence:
+          enabled: true
+          size: 10Gi
+          storageClass: "ssd"
+      resources:
+        limits:
+          cpu: 500m
+          memory: 1Gi
+        requests:
+          cpu: 100m
+          memory: 256Mi
+    
+    # Configuration du proxy
+    proxy:
+      type: ClusterIP
+      http:
+        enabled: true
+        servicePort: 80
+        containerPort: 8000
+      tls:
+        enabled: true
+        servicePort: 443
+        containerPort: 8443
+      stream:
+        enabled: false
+    
+    # Configuration de l'admin API
+    admin:
+      enabled: true
+      http:
+        enabled: true
+        servicePort: 8001
+        containerPort: 8001
+      tls:
+        enabled: false
+    
+    # Configuration du mode DB-less
+    env:
+      database: postgres
+      pg_host: kong-postgresql
+      pg_user: kong
+      pg_password: ${KONG_PG_PASSWORD}
+      pg_database: kong
+      nginx_worker_processes: "2"
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+      KONG_PROXY_LISTEN: 0.0.0.0:8000, 0.0.0.0:8443 ssl
+      KONG_ADMIN_LISTEN: 0.0.0.0:8001
+      KONG_NGINX_HTTP_SSL_PREFER_SERVER_CIPHERS: "on"
+      KONG_NGINX_HTTP_SSL_CIPHER: "EECDH+CHACHA20:EECDH+AES128:RSA+AES128:EECDH+AES256:RSA+AES256:EECDH+3DES:RSA+3DES:!MD5"
+      KONG_SSL_CIPHER_SUITE: "modern"
+      KONG_NGINX_HTTP_SSL_PROTOCOLS: "TLSv1.2 TLSv1.3"
+      KONG_NGINX_HTTP_SSL_SESSION_TICKETS: "off"
+      KONG_NGINX_HTTP_SSL_SESSION_TIMEOUT: "1d"
+      KONG_HEADERS: "off"
+      KONG_TRUSTED_IPS: "0.0.0.0/0,::/0"
+      KONG_REAL_IP_HEADER: "X-Forwarded-For"
+      KONG_REAL_IP_RECURSIVE: "on"
+      KONG_CLIENT_MAX_BODY_SIZE: "10m"
+      KONG_CLIENT_BODY_BUFFER_SIZE: "10m"
+      KONG_LUA_SSL_TRUSTED_CERTIFICATE: "system"
+      KONG_LUA_SSL_VERIFY_DEPTH: "3"
+      KONG_SSL_CERT: "/etc/secrets/kong/tls.crt"
+      KONG_SSL_CERT_KEY: "/etc/secrets/kong/tls.key"
+    
+    # Configuration des plugins
+    plugins:
+      config: |
+        {
+          "ip-restriction": {},
+          "rate-limiting": {},
+          "request-size-limiting": {},
+          "response-ratelimiting": {},
+          "file-log": {},
+          "http-log": {},
+          "tcp-log": {},
+          "udp-log": {},
+          "syslog": {},
+          "statsd": {},
+          "datadog": {},
+          "prometheus": {},
+          "zipkin": {},
+          "opentelemetry": {},
+          "jwt": {},
+          "key-auth": {},
+          "basic-auth": {},
+          "oauth2": {},
+          "acl": {},
+          "cors": {},
+          "request-transformer": {},
+          "response-transformer": {},
+          "request-termination": {},
+          "correlation-id": {},
+          "bot-detection": {},
+          "hmac-auth": {},
+          "ldap-auth": {},
+          "openid-connect": {}
+        }
+    
+    # Configuration des secrets
+    secretVolumes:
+      - secret:
+          secretName: kong-tls-secret
+        items:
+          - key: tls.crt
+            path: tls.crt
+          - key: tls.key
+            path: tls.key
+    
+    # Configuration de l'ingress
+    ingressController:
+      enabled: true
+      installCRDs: true
+      serviceMonitor:
+        enabled: true
+        additionalLabels:
+          release: kube-prometheus-stack
+      resources:
+        limits:
+          cpu: 100m
+          memory: 128Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi
+    
+    # Configuration de la surveillance
+    serviceMonitor:
+      enabled: true
+      additionalLabels:
+        release: kube-prometheus-stack
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Configuration des ressources personnalisées pour Kong
+apiVersion: configuration.konghq.com/v1
+kind: KongClusterPlugin
+metadata:
+  name: cors
+  annotations:
+    kubernetes.io/ingress.class: kong
+  labels:
+    global: "true"
+plugin: cors
+config:
+  origins:
+    - https://*.banadoctor.com
+  methods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - OPTIONS
+  headers:
+    - Content-Type
+    - Authorization
+    - X-Requested-With
+  exposed_headers:
+    - X-Auth-Token
+  credentials: true
+  max_age: 3600
+  preflight_continue: false
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: rate-limiting
+  namespace: kong
+  annotations:
+    kubernetes.io/ingress.class: kong
+config:
+  minute: 60
+  hour: 1000
+  policy: local
+  limit_by: consumer
+  hide_client_headers: false
+plugin: rate-limiting
+---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: request-size-limiting
+  namespace: kong
+  annotations:
+    kubernetes.io/ingress.class: kong
+config:
+  allowed_payload_size: 128
+  size_unit: kilobytes
+  require_content_length: false
+plugin: request-size-limiting
+---
+# Configuration de l'ingress pour l'API BanaDoctor
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: banadoctor-api
+  namespace: medecin-africa
+  annotations:
+    kubernetes.io/ingress.class: kong
+    konghq.com/plugins: cors, rate-limiting, request-size-limiting
+    konghq.com/protocols: https
+    konghq.com/https-redirect-status-code: "301"
+    konghq.com/override-headers: "X-Forwarded-For,X-Forwarded-Proto,X-Forwarded-Host,X-Forwarded-Port,X-Real-IP,X-Request-ID,X-Request-Start"
+    konghq.com/ssl-redirect: "true"
+    konghq.com/strip-path: "true"
+    konghq.com/preserve-host: "false"
+    konghq.com/retries: "5"
+    konghq.com/connect-timeout: "60000"
+    konghq.com/write-timeout: "60000"
+    konghq.com/read-timeout: "60000"
+    konghq.com/upstream-keepalive: "60"
+spec:
+  tls:
+    - hosts:
+        - api.banadoctor.com
+      secretName: kong-tls-secret
+  rules:
+    - host: api.banadoctor.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: banadoctor-backend
+                port:
+                  number: 8000
+---
+# Configuration de la politique réseau pour Kong
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-kong-traffic
+  namespace: kong
+spec:
+  description: "Allow traffic to Kong API Gateway"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: kong
+  ingress:
+  - fromEndpoints:
+    - {}
+    toPorts:
+    - ports:
+      - port: "8000"
+        protocol: TCP
+      - port: "8443"
+        protocol: TCP
+  egress:
+  - toEndpoints:
+    - {}
+    toPorts:
+    - ports:
+      - port: "80"
+        protocol: TCP
+      - port: "443"
+        protocol: TCP
+      - port: "53"
+        protocol: UDP
+      - port: "53"
+        protocol: TCP
+---
+# Configuration des certificats TLS pour Kong
+apiVersion: v1
+kind: Secret
+type: kubernetes.io/tls
+metadata:
+  name: kong-tls-secret
+  namespace: kong
+data:
+  tls.crt: ${BASE64_TLS_CRT}
+  tls.key: ${BASE64_TLS_KEY}
