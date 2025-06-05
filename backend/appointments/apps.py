@@ -8,4 +8,4 @@ class AppointmentsConfig(AppConfig):
     
     def ready(self):
         # Import signals to register them
-        import appointments.signals
+        import appointments.signals  # noqa: F401

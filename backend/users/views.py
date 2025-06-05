@@ -131,7 +131,7 @@ class PasswordTokenCheckAPI(generics.GenericAPIView):
                 'token': token
             }, status=status.HTTP_200_OK)
             
-        except Exception as e:
+        except Exception:
             return Response(
                 {'error': 'Link is no longer valid'},
                 status=status.HTTP_401_UNAUTHORIZED
@@ -166,7 +166,8 @@ class SetNewPasswordAPIView(generics.GenericAPIView):
                 status=status.HTTP_200_OK
             )
             
-        except Exception as e:
+        except Exception:
+            logger.error("An error occurred while resetting the password")
             return Response(
                 {'error': 'Something went wrong'},
                 status=status.HTTP_400_BAD_REQUEST
