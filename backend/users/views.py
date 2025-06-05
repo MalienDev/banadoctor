@@ -25,7 +25,6 @@ User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
-
 class RegisterView(generics.CreateAPIView):
     """View for user registration"""
     queryset = User.objects.all()
@@ -35,7 +34,7 @@ class RegisterView(generics.CreateAPIView):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = serializer.save()
+        serializer.save()
         
         # In a real app, you would send a verification email here
         # send_verification_email(user)
@@ -98,9 +97,9 @@ class RequestPasswordResetEmail(generics.GenericAPIView):
         email = serializer.validated_data['email']
         
         if User.objects.filter(email=email).exists():
-            user = User.objects.get(email=email)
             # In a real app, you would send a password reset email here
             # send_password_reset_email(user)
+            pass
         
         # Always return success to prevent email enumeration
         return Response(
@@ -187,6 +186,7 @@ class DoctorAvailabilityView(generics.ListCreateAPIView):
         if not self.request.user.is_doctor:
             raise PermissionDenied("Only doctors can set availability")
         serializer.save(doctor=self.request.user)
+
 
 @api_view(['GET'])
 @permission_classes([AllowAny])

@@ -39,35 +39,41 @@ sentry_sdk.init(
     before_breadcrumb=lambda breadcrumb, hint: filter_breadcrumb(breadcrumb),
 )
 
+def _filter_request_headers(request_event):
+    """Filters sensitive headers from the request event."""
+    if 'headers' in request_event:
+        sensitive_headers = ['authorization', 'cookie', 'set-cookie', 'x-csrftoken', 'x-api-key']
+        for header in sensitive_headers:
+            if header in request_event['headers']:
+                request_event['headers'][header] = '[FILTERED]'
+
+def _filter_request_data(request_event):
+    """Filters sensitive data from the request body."""
+    if 'data' in request_event and isinstance(request_event['data'], dict):
+        sensitive_fields = ['password', 'token', 'secret', 'key', 'api_key', 'access_token', 'refresh_token']
+        for field in sensitive_fields:
+            if field in request_event['data']:
+                request_event['data'][field] = '[FILTERED]'
+
+def _filter_event_tags(event):
+    """Filters sensitive tags from the event."""
+    if 'tags' in event:
+        sensitive_tags = ['password', 'token', 'secret', 'key']
+        for tag in sensitive_tags:
+            if tag in event['tags']:
+                event['tags'][tag] = '[FILTERED]'
+
 def filter_sensitive_data(event):
     """Filtre les données sensibles des événements Sentry."""
     # Ne pas envoyer d'événements sans stacktrace
     if 'exception' not in event and 'message' not in event:
         return None
         
-    # Supprimer les données sensibles des requêtes
     if 'request' in event:
-        # Supprimer les en-têtes sensibles
-        if 'headers' in event['request']:
-            sensitive_headers = ['authorization', 'cookie', 'set-cookie', 'x-csrftoken', 'x-api-key']
-            for header in sensitive_headers:
-                if header in event['request']['headers']:
-                    event['request']['headers'][header] = '[FILTERED]'
-        
-        # Supprimer les données sensibles du corps de la requête
-        if 'data' in event['request']:
-            if isinstance(event['request']['data'], dict):
-                sensitive_fields = ['password', 'token', 'secret', 'key', 'api_key', 'access_token', 'refresh_token']
-                for field in sensitive_fields:
-                    if field in event['request']['data']:
-                        event['request']['data'][field] = '[FILTERED]'
+        _filter_request_headers(event['request'])
+        _filter_request_data(event['request'])
     
-    # Supprimer les données sensibles des tags
-    if 'tags' in event:
-        sensitive_tags = ['password', 'token', 'secret', 'key']
-        for tag in sensitive_tags:
-            if tag in event['tags']:
-                event['tags'][tag] = '[FILTERED]'
+    _filter_event_tags(event)
     
     return event
 
