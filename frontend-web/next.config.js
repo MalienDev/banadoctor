@@ -18,7 +18,7 @@ const nextConfig = {
         has: [
           {
             type: 'host',
-            value: 'pro.monsite.com',
+            value: 'pro.localhost.com',
           },
         ],
         destination: '/pro/:path*',

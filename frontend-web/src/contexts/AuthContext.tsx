@@ -2,7 +2,12 @@
 
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-import axios from 'axios';
+import api from '@/lib/axios'; // Custom axios configuration with interceptors
+
+interface ApiResponse<T> {
+  user: T;
+  // Add other fields if your API returns more data
+}
 
 type User = {
   id: string;
@@ -38,20 +43,33 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     // Check if user is logged in
     const checkAuth = async () => {
       try {
-        const token = localStorage.getItem('token');
+        const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
         if (token) {
-          // Verify token with backend
-          const { data } = await axios.get('/api/auth/me', {
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          });
-          setUser(data.user);
+          try {
+            // Verify token with backend
+            const { data } = await api.get<ApiResponse<User>>('/api/auth/me');
+            setUser(data.user);
+          } catch (error) {
+            console.error('API Error:', error);
+            // Clear invalid token
+            if (typeof window !== 'undefined') {
+              localStorage.removeItem('token');
+            }
+            setUser(null);
+          }
+        } else {
+          // No token, ensure user is set to null
+          setUser(null);
         }
       } catch (error) {
-        console.error('Authentication check failed:', error);
-        localStorage.removeItem('token');
+        console.error('Auth check failed:', error);
+        // Clear invalid token
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem('token');
+        }
+        setUser(null);
       } finally {
+        // Always set loading to false
         setLoading(false);
       }
     };
@@ -59,9 +77,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     checkAuth();
   }, []);
 
+  interface LoginResponse {
+    token: string;
+    user: User;
+  }
+
   const login = async (email: string, password: string) => {
     try {
-      const { data } = await axios.post('/api/auth/login', { email, password });
+      const { data } = await axios.post<LoginResponse>('/api/auth/login', { email, password });
       localStorage.setItem('token', data.token);
       setUser(data.user);
       router.push('/dashboard');
@@ -71,6 +94,11 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+  interface RegisterResponse {
+    token: string;
+    user: User;
+  }
+
   const register = async (userData: {
     email: string;
     password: string;
@@ -79,7 +107,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     role: 'patient' | 'doctor';
   }) => {
     try {
-      const { data } = await axios.post('/api/auth/register', userData);
+      const { data } = await api.post<RegisterResponse>('/auth/register', userData);
       localStorage.setItem('token', data.token);
       setUser(data.user);
       router.push('/dashboard');
