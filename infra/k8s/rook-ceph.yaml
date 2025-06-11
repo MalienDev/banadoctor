@@ -1,0 +1,284 @@
+# Création du namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rook-ceph
+---
+# Installation de Rook Ceph avec Helm (version corrigée)
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: rook-ceph
+  namespace: rook-ceph
+spec:
+  repo: https://charts.rook.io/release
+  chart: rook-ceph
+  chartVersion: "v1.10.10"  # Version valide
+  targetNamespace: rook-ceph
+  valuesContent: |-
+    image:
+      repository: rook/ceph
+      tag: v1.10.10
+    
+    resources:
+      operator:
+        limits:
+          cpu: "1"
+          memory: 1Gi
+        requests:
+          cpu: "100m"
+          memory: 256Mi
+      
+      discover:
+        limits:
+          cpu: "500m"
+          memory: 512Mi
+        requests:
+          cpu: "50m"
+          memory: 128Mi
+    
+    logLevel: INFO
+    
+    csi:
+      enableRbdDriver: true
+      enableCephfsDriver: true
+      enableNfsDriver: false
+      enableGrpcMetrics: true
+      enableCephfsSnapshotter: true
+      enableCephfsKernelDriver: true
+      enableEncryption: true
+      enableOMAPGenerator: true
+      enableReadAffinity: true
+      
+      resources:
+        csiProvisioner:
+          limits:
+            cpu: "1"
+            memory: 1Gi
+          requests:
+            cpu: "100m"
+            memory: 256Mi
+        csiResizer:
+          limits:
+            cpu: "1"
+            memory: 1Gi
+          requests:
+            cpu: "100m"
+            memory: 256Mi
+        csiSnapshotter:
+          limits:
+            cpu: "1"
+            memory: 1Gi
+          requests:
+            cpu: "100m"
+            memory: 256Mi
+        csiAttacher:
+          limits:
+            cpu: "1"
+            memory: 1Gi
+          requests:
+            cpu: "100m"
+            memory: 256Mi
+    
+    dashboard:
+      enabled: false  # Désactivé (utiliser le dashboard Ceph à la place)
+    
+    securityContext:
+      fsGroup: 2010
+      runAsNonRoot: true
+      runAsUser: 2010
+      runAsGroup: 2010
+    
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: node-role.kubernetes.io/storage
+                  operator: In
+                  values: ["true"]
+---
+# Configuration du cluster Ceph (avec placement et pool par défaut)
+apiVersion: ceph.rook.io/v1
+kind: CephCluster
+metadata:
+  name: rook-ceph
+  namespace: rook-ceph
+spec:
+  dataDirHostPath: /var/lib/rook
+  mon:
+    count: 3
+    allowMultiplePerNode: false
+    volumeClaimTemplate:
+      spec:
+        storageClassName: local-storage
+        resources:
+          requests:
+            storage: 10Gi
+  cephVersion:
+    image: ceph/ceph:v16.2.9
+    allowUnsupported: false
+  storage:
+    useAllNodes: true
+    useAllDevices: false
+    deviceFilter: "^sd[b-z]"
+    config:
+      storeType: bluestore
+      databaseSizeMB: "1024"
+      journalSizeMB: "4096"
+      osdsPerDevice: "1"
+  network:
+    provider: host
+  healthCheck:
+    daemonHealth:
+      mon:
+        interval: 10s
+        timeout: 15s
+      osd:
+        interval: 10s
+      status:
+        interval: 5s
+  monitoring:
+    enabled: true
+    createPrometheusRules: true
+    rulesNamespace: monitoring
+  dashboard:
+    enabled: true
+    ssl: true
+  mgr:
+    modules:
+      - name: dashboard
+        enabled: true
+      - name: prometheus
+        enabled: true
+  placement:
+    all:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+          - matchExpressions:
+            - key: node-role.kubernetes.io/storage
+              operator: In
+              values: ["true"]
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+---
+# Pool de stockage RBD (nécessaire avant le StorageClass)
+apiVersion: ceph.rook.io/v1
+kind: CephBlockPool
+metadata:
+  name: replicapool
+  namespace: rook-ceph
+spec:
+  failureDomain: host
+  replicated:
+    size: 3
+    requireSafeReplicaSize: true
+---
+# RBD Block StorageClass (références secrètes corrigées)
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: rook-ceph-block
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: rook-ceph.rbd.csi.ceph.com
+parameters:
+  clusterID: rook-ceph
+  pool: replicapool
+  imageFormat: "2"
+  imageFeatures: layering
+  csi.storage.k8s.io/provisioner-secret-name: rook-csi-rbd-provisioner
+  csi.storage.k8s.io/provisioner-secret-namespace: rook-ceph
+  csi.storage.k8s.io/controller-expand-secret-name: rook-csi-rbd-provisioner
+  csi.storage.k8s.io/controller-expand-secret-namespace: rook-ceph
+  csi.storage.k8s.io/node-stage-secret-name: rook-csi-rbd-node
+  csi.storage.k8s.io/node-stage-secret-namespace: rook-ceph
+  csi.storage.k8s.io/fstype: ext4
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+---
+# Configuration du CephFS (correction du pool metadata)
+apiVersion: ceph.rook.io/v1
+kind: CephFilesystem
+metadata:
+  name: myfs
+  namespace: rook-ceph
+spec:
+  metadataPool:
+    replicated:
+      size: 3
+      requireSafeReplicaSize: true
+  dataPools:
+    - replicated:
+        size: 3
+        requireSafeReplicaSize: true
+  metadataServer:
+    activeCount: 1
+    activeStandby: true
+    resources:
+      limits:
+        cpu: "500m"
+        memory: 1Gi
+      requests:
+        cpu: "100m"
+        memory: 256Mi
+---
+# CephFS StorageClass (nom de pool corrigé)
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: rook-cephfs
+provisioner: rook-ceph.cephfs.csi.ceph.com
+parameters:
+  clusterID: rook-ceph
+  fsName: myfs
+  csi.storage.k8s.io/provisioner-secret-name: rook-csi-cephfs-provisioner
+  csi.storage.k8s.io/provisioner-secret-namespace: rook-ceph
+  csi.storage.k8s.io/controller-expand-secret-name: rook-csi-cephfs-provisioner
+  csi.storage.k8s.io/controller-expand-secret-namespace: rook-ceph
+  csi.storage.k8s.io/node-stage-secret-name: rook-csi-cephfs-node
+  csi.storage.k8s.io/node-stage-secret-namespace: rook-ceph
+  csi.storage.k8s.io/fstype: ext4
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+---
+# Configuration du stockage objet Ceph
+apiVersion: ceph.rook.io/v1
+kind: CephObjectStore
+metadata:
+  name: my-store
+  namespace: rook-ceph
+spec:
+  metadataPool:
+    failureDomain: host
+    replicated:
+      size: 3
+  dataPool:
+    failureDomain: host
+    replicated:
+      size: 3
+  gateway:
+    type: s3
+    port: 80
+    securePort: 443
+    instances: 1
+---
+# Configuration du bucket S3
+apiVersion: ceph.rook.io/v1
+kind: CephObjectStoreUser
+metadata:
+  name: banadoctor-user
+  namespace: rook-ceph
+spec:
+  store: my-store
+  displayName: "BanaDoctor User"

@@ -1,0 +1,519 @@
+---
+# Installation de Longhorn avec Helm - Configuration de production
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: longhorn
+  namespace: longhorn-system
+  labels:
+    app.kubernetes.io/name: longhorn
+    app.kubernetes.io/instance: longhorn
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: banadoctor
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.4.0"
+spec:
+  repo: https://charts.longhorn.io
+  chart: longhorn
+  version: "1.4.0"
+  targetNamespace: longhorn-system
+  createNamespace: true
+  valuesContent: |-
+    # Configuration de base
+    image:
+      longhorn:
+        engine:
+          repository: longhornio/longhorn-engine
+          tag: v1.4.0
+          pullPolicy: IfNotPresent
+        manager:
+          repository: longhornio/longhorn-manager
+          tag: v1.4.0
+          pullPolicy: IfNotPresent
+        ui:
+          repository: longhornio/longhorn-ui
+          tag: v1.4.0
+          pullPolicy: IfNotPresent
+        instanceManager:
+          repository: longhornio/longhorn-instance-manager
+          tag: v1.4.0
+          pullPolicy: IfNotPresent
+        shareManager:
+          repository: longhornio/longhorn-share-manager
+          tag: v1.4.0
+          pullPolicy: IfNotPresent
+        csi:
+          attacher:
+            repository: longhornio/csi-attacher
+            tag: v3.4.0
+            pullPolicy: IfNotPresent
+          provisioner:
+            repository: longhornio/csi-provisioner
+            tag: v2.1.2
+            pullPolicy: IfNotPresent
+          nodeDriverRegistrar:
+            repository: longhornio/csi-node-driver-registrar
+            tag: v2.5.0
+            pullPolicy: IfNotPresent
+          resizer:
+            repository: longhornio/csi-resizer
+            tag: v1.2.0
+            pullPolicy: IfNotPresent
+          snapshotter:
+            repository: longhornio/csi-snapshotter
+            tag: v3.0.3
+            pullPolicy: IfNotPresent
+    
+    # Configuration des paramètres par défaut
+    defaultSettings:
+      # Configuration du stockage
+      defaultDataPath: /var/lib/longhorn/
+      defaultReplicaCount: 3
+      defaultDataLocality: best-effort
+      guaranteedEngineCPU: 0.5
+      defaultLonghornStaticStorageClass: longhorn-static
+      backupTarget: "s3://backup-bucket@us-east-1/backup"
+      backupTargetCredentialSecret: "longhorn-backup-secret"
+      allowRecurringJobWhileVolumeDetached: true
+      
+      # Configuration des réglages avancés
+      createDefaultDiskLabeledNodes: true
+      defaultDiskPath: /var/lib/longhorn/
+      replicaAutoBalance: "least-effort"
+      storageOverProvisioningPercentage: 150
+      storageMinimalAvailablePercentage: 15
+      upgradeChecker: true
+      
+      # Configuration de la journalisation
+      logLevel: info
+      
+      # Configuration des sauvegardes
+      backupstorePollInterval: 300
+      concurrentBackupRestorePerNodeLimit: 5
+      backupCompressionMethod: lz4
+      
+      # Configuration des réglages réseau
+      v2DataEngine: false
+      
+      # Configuration des réglages de performance
+      disableSchedulingOnCordonedNode: true
+      replicaReplenishmentWaitInterval: 600
+      
+      # Configuration des réglages de sécurité
+      allowVolumeCreationWithDegradedAvailability: true
+      autoCleanupSystemGeneratedPvc: true
+      
+      # Configuration des réglages de mise à l'échelle
+      allowNodeDrainWithLastHealthyReplica: true
+      
+      # Configuration des réglages de débogage
+      disableReplicaRebuild: false
+      disableRevisionCounter: false
+      
+      # Configuration des snapshots
+      concurrentAutomaticEngineUpgradePerNodeLimit: 5
+      
+      # Configuration des réglages de récupération
+      replicaSoftAntiAffinity: true
+      
+      # Configuration des réglages de maintenance
+      systemManagedPodsImagePullPolicy: IfNotPresent
+      
+      # Configuration des réglages de surveillance
+      createDefaultDiskLabeledNodes: true
+      
+      # Configuration des réglages de mise à niveau
+      autoUpgradeLonghorn: "enabled"
+      
+      # Configuration des réglages de stockage
+      defaultReplicaCount: 3
+      defaultDataLocality: "best-effort"
+      
+      # Configuration des réglages réseau
+      nodeDownPodDeletionPolicy: "do-nothing"
+      
+      # Configuration des réglages de récupération
+      replicaReplenishmentWaitInterval: 600
+      
+      # Configuration des réglages de débogage
+      disableRevisionCounter: false
+      
+      # Configuration des réglages de performance
+      replicaSoftAntiAffinity: true
+      
+      # Configuration des réglages de stockage
+      storageMinimalAvailablePercentage: 15
+      
+      # Configuration des réglages de maintenance
+      systemManagedPodsImagePullPolicy: IfNotPresent
+      
+      # Configuration des réglages de surveillance
+      createDefaultDiskLabeledNodes: true
+      
+      # Configuration des réglages de mise à niveau
+      autoUpgradeLonghorn: "enabled"
+    
+    # Configuration du service
+    service:
+      ui:
+        type: LoadBalancer
+        nodePort: 32500
+        annotations:
+          service.beta.kubernetes.io/aws-load-balancer-type: nlb
+          service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+          service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    
+    # Configuration de l'ingress
+    ingress:
+      enabled: true
+      ingressClassName: nginx
+      host: longhorn.banadoctor.com
+      path: /
+      pathType: Prefix
+      annotations:
+        nginx.ingress.kubernetes.io/ssl-redirect: "true"
+        nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+        nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+        nginx.ingress.kubernetes.io/proxy-read-timeout: "1800"
+        nginx.ingress.kubernetes.io/proxy-send-timeout: "1800"
+        nginx.ingress.kubernetes.io/proxy-body-size: "0"
+        nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+        nginx.ingress.kubernetes.io/configuration-snippet: |
+          proxy_ssl_server_name on;
+          proxy_ssl_name $host;
+          proxy_ssl_verify off;
+      tls:
+        - secretName: longhorn-tls
+          hosts:
+            - longhorn.banadoctor.com
+    
+    # Configuration de la persistance
+    persistence:
+      defaultClass: true
+      defaultClassReplicaCount: 3
+      reclaimPolicy: Retain
+      
+    # Configuration des ressources
+    resources:
+      csiAttacher:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 256Mi
+      csiProvisioner:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 256Mi
+      csiResizer:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 256Mi
+      csiSnapshotter:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 256Mi
+      engineImage:
+        limits:
+          cpu: 1
+          memory: 1Gi
+        requests:
+          cpu: 250m
+          memory: 512Mi
+      instanceManager:
+        limits:
+          cpu: 1
+          memory: 1Gi
+        requests:
+          cpu: 250m
+          memory: 512Mi
+      longhornManager:
+        limits:
+          cpu: 1
+          memory: 1Gi
+        requests:
+          cpu: 250m
+          memory: 512Mi
+      longhornUI:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 256Mi
+      shareManager:
+        limits:
+          cpu: 1
+          memory: 1Gi
+        requests:
+          cpu: 250m
+          memory: 512Mi
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "node-role.kubernetes.io/storage"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    nodeSelector:
+      node-role.kubernetes.io/storage: "true"
+    
+    # Configuration des préférences de nœud
+    defaultSetting:
+      taintToleration: "node-role.kubernetes.io/storage=:NoSchedule"
+      
+    # Configuration des disques par nœud
+    defaultDisks:
+      - path: /var/lib/longhorn/
+        allowScheduling: true
+        tags: ["ssd", "fast"]
+    
+    # Configuration des sauvegardes
+    backup:
+      enabled: true
+      intervalHours: 24
+      retention: 30
+      concurrentJobs: 5
+      
+    # Configuration des snapshots
+    snapshot:
+      enabled: true
+      intervalHours: 1
+      retention: 168
+      
+    # Configuration des volumes
+    volume:
+      defaultReplicaCount: 3
+      defaultDataLocality: "best-effort"
+      defaultReplicaAutoBalance: "least-effort"
+      defaultReplicaSoftAntiAffinity: true
+      defaultReplicaZoneSoftAntiAffinity: true
+      defaultReplicaDiskSoftAntiAffinity: true
+      defaultReplicaNodeSoftAntiAffinity: true
+      
+    # Configuration des performances
+    performance:
+      engineReplicaTimeout: 300
+      replicaReplenishmentWaitInterval: 600
+      guaranteedEngineCPU: 0.5
+      
+    # Configuration de la surveillance
+    monitoring:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        additionalLabels:
+          release: kube-prometheus-stack
+      prometheusRule:
+        enabled: true
+        additionalLabels:
+          release: kube-prometheus-stack
+        rules:
+          - alert: LonghornVolumeStatus
+            expr: 100 * (longhorn_volume_actual_size_bytes / longhorn_volume_size_bytes) > 80
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: Longhorn volume {{ $labels.volume }} is using more than 80% of its capacity
+              description: "Volume {{ $labels.volume }} is using {{ $value }}% of its capacity"
+          - alert: LonghornVolumeDegraded
+            expr: longhorn_volume_state != 1
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: Longhorn volume {{ $labels.volume }} is in a degraded state
+              description: "Volume {{ $labels.volume }} state is {{ $value }}"
+      systemManagedPodsImagePullPolicy: IfNotPresent
+      
+    # Configuration des fonctionnalités expérimentales
+    featureGates:
+      # Activer les fonctionnalités expérimentales
+      kubernetesClusterAutoscalerEnabled: false
+      
+    # Configuration de la surveillance
+    serviceMonitor:
+      enabled: true
+      additionalLabels:
+        release: kube-prometheus-stack
+      
+    # Configuration des sauvegardes
+    backupTarget: {}
+    backupTargetCredentialSecret: {}
+    
+    # Configuration des volumes persistants
+    persistence:
+      defaultClass: true
+      defaultClassReplicaCount: 3
+      reclaimPolicy: Delete
+      
+    # Configuration des réglages de stockage
+    defaultSettings:
+      # Configuration du stockage
+      defaultDataPath: /var/lib/longhorn/
+      defaultReplicaCount: 3
+      defaultDataLocality: disabled
+      guaranteedEngineCPU: 0.25
+      defaultLonghornStaticStorageClass: longhorn-static
+      backupTarget: ""
+      backupTargetCredentialSecret: ""
+      allowRecurringJobWhileVolumeDetached: true
+      
+      # Configuration des réglages avancés
+      createDefaultDiskLabeledNodes: true
+      defaultDiskPath: /var/lib/longhorn/
+      replicaAutoBalance: "ignored"
+      storageOverProvisioningPercentage: 200
+      storageMinimalAvailablePercentage: 10
+      upgradeChecker: true
+      
+      # Configuration de la journalisation
+      logLevel: info
+      
+      # Configuration des sauvegardes
+      backupstorePollInterval: 300
+      
+      # Configuration des réglages réseau
+      v2DataEngine: false
+      
+      # Configuration des réglages de performance
+      disableSchedulingOnCordonedNode: true
+      replicaReplenishmentWaitInterval: 0
+      
+      # Configuration des réglages de sécurité
+      allowVolumeCreationWithDegradedAvailability: true
+      autoCleanupSystemGeneratedPvc: true
+      
+      # Configuration des réglages de mise à l'échelle
+      allowNodeDrainWithLastHealthyReplica: true
+      allowVolumeCreationWithDegradedAvailability: true
+      
+      # Configuration des réglages de débogage
+      disableReplicaRebuild: false
+      disableRevisionCounter: false
+      disableSchedulingOnCordonedNode: true
+---
+# Configuration de la classe de stockage par défaut
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: longhorn
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: driver.longhorn.io
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+parameters:
+  numberOfReplicas: "3"
+  staleReplicaTimeout: "2880" # 48 heures en minutes
+  fromBackup: ""
+  fsType: "ext4"
+---
+# Configuration de la classe de stockage haute performance
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: longhorn-high-performance
+provisioner: driver.longhorn.io
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+parameters:
+  numberOfReplicas: "2"
+  staleReplicaTimeout: "1440" # 24 heures en minutes
+  fromBackup: ""
+  fsType: "ext4"
+  diskSelector: "ssd"
+---
+# Configuration de la classe de stockage pour les sauvegardes
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: longhorn-backup
+provisioner: driver.longhorn.io
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+parameters:
+  numberOfReplicas: "1"
+  staleReplicaTimeout: "10080" # 1 semaine en minutes
+  fromBackup: ""
+  fsType: "ext4"
+  diskSelector: "backup"
+---
+# Configuration du volume persistant pour les données Longhorn
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: longhorn-pv-claim
+  namespace: longhorn-system
+spec:
+  storageClassName: longhorn
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+---
+# Configuration du déploiement de test Longhorn
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: longhorn-test
+  namespace: longhorn-system
+  labels:
+    app: longhorn-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: longhorn-test
+  template:
+    metadata:
+      labels:
+        app: longhorn-test
+    spec:
+      containers:
+      - name: busybox
+        image: busybox
+        command: ["/bin/sh"]
+        args: ["-c", "while true; do echo $(date) >> /mnt/store/log.txt; sleep 5; done"]
+        volumeMounts:
+        - name: longhorn-pv
+          mountPath: /mnt/store
+      volumes:
+      - name: longhorn-pv
+        persistentVolumeClaim:
+          claimName: longhorn-pv-claim
+---
+# Configuration du service de test Longhorn
+apiVersion: v1
+kind: Service
+metadata:
+  name: longhorn-test
+  namespace: longhorn-system
+  labels:
+    app: longhorn-test
+spec:
+  ports:
+  - port: 80
+    targetPort: 80
+  selector:
+    app: longhorn-test
+  type: ClusterIP

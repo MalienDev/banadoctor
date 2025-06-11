@@ -1,0 +1,13 @@
+Bonjour {{ patient.get_full_name|default:patient.email }},
+
+Nous vous confirmons votre rendez-vous avec le Dr {{ doctor.get_full_name }}.
+
+Détails du rendez-vous :
+- Date : {{ appointment.scheduled_date|date:"l d F Y" }}
+- Heure : {{ appointment.start_time|time:"H:i" }} - {{ appointment.end_time|time:"H:i" }}
+- Type : {{ appointment.get_appointment_type_display }}
+
+Vous recevrez un rappel 24h avant votre rendez-vous.
+
+Cordialement,
+L'équipe Medecin Africa

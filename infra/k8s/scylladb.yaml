@@ -1,0 +1,259 @@
+---
+# Installation de ScyllaDB avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: scylladb
+  namespace: scylladb
+spec:
+  repo: https://scylla-operator-charts.storage.googleapis.com/stable
+  chart: scylla-operator
+  version: "1.7.0"
+  targetNamespace: scylladb
+  createNamespace: true
+  valuesContent: |-
+    # Configuration de l'opérateur ScyllaDB
+    operator:
+      image:
+        repository: scylladb/scylla-operator
+        tag: v1.7.0
+        pullPolicy: IfNotPresent
+      
+      # Configuration des ressources
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+    
+    # Configuration du cluster ScyllaDB
+    scyllaCluster:
+      # Configuration de base
+      repository: scylladb/scylla
+      version: 5.1.8
+      agentVersion: 3.2.6
+      developerMode: false
+      
+      # Configuration des ressources
+      resources:
+        limits:
+          cpu: 2
+          memory: 8Gi
+        requests:
+          cpu: 1
+          memory: 4Gi
+      
+      # Configuration du stockage
+      capacity: 100Gi
+      storageClass: "ssd"
+      
+      # Configuration du nombre de nœuds
+      datacenter:
+        name: dc1
+        racks:
+          - name: rack1
+            members: 3
+            storage:
+              capacity: 100Gi
+              storageClassName: "ssd"
+            resources:
+              limits:
+                cpu: 2
+                memory: 8Gi
+              requests:
+                cpu: 1
+                memory: 4Gi
+      
+      # Configuration de la maintenance
+      maintenanceWindow: []
+      
+      # Configuration du réseau
+      exposeOptions:
+        cql:
+          ingress:
+            enabled: true
+            ingressClassName: nginx
+            annotations:
+              nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+              nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+            hosts:
+              - host: scylladb.banadoctor.com
+                paths:
+                  - path: /
+                    pathType: Prefix
+      
+      # Configuration de l'authentification
+      auth:
+        enabled: true
+        cassandra:
+          username: cassandra
+          password: "${SCYLLADB_CASSANDRA_PASSWORD}"
+      
+      # Configuration des paramètres ScyllaDB
+      scyllaConfig: |
+        authenticator: PasswordAuthenticator
+        authorizer: CassandraAuthorizer
+        batch_size_warn_threshold_in_kb: 5
+        batch_size_fail_threshold_in_kb: 50
+        cas_contention_timeout_in_ms: 1000
+        client_encryption_options:
+          enabled: true
+          certificate: /etc/scylla/certs/scylla.crt
+          keyfile: /etc/scylla/certs/scylla.key
+        cluster_name: banadoctor
+        compaction_throughput_mb_per_sec: 16
+        concurrent_compactors: 2
+        concurrent_counter_writes: 32
+        concurrent_materialized_view_writes: 32
+        concurrent_reads: 32
+        concurrent_writes: 32
+        counter_cache_save_period: 7200
+        counter_cache_size_in_mb: 128
+        counter_write_request_timeout_in_ms: 5000
+        cross_node_timeout: false
+        dynamic_snitch_badness_threshold: 0.1
+        dynamic_snitch_reset_interval_in_ms: 60000
+        dynamic_snitch_update_interval_in_ms: 100
+        enable_optimized_replica_selection: true
+        endpoint_snitch: GossipingPropertyFileSnitch
+        file_cache_size_in_mb: 512
+        hinted_handoff_enabled: true
+        incremental_backups: true
+        inter_dc_tcp_nodelay: true
+        internode_compression: all
+        key_cache_size_in_mb: 256
+        max_hint_window_in_ms: 10800000
+        max_hints_delivery_threads: 8
+        memtable_allocation_type: heap_buffers
+        memtable_cleanup_threshold: 0.11
+        memtable_flush_writers: 4
+        memtable_heap_space_in_mb: 2048
+        memtable_offheap_space_in_mb: 2048
+        native_transport_max_concurrent_connections: -1
+        native_transport_max_concurrent_connections_per_ip: -1
+        native_transport_max_frame_size_in_mb: 512
+        native_transport_max_threads: 128
+        num_tokens: 256
+        partitioner: org.apache.cassandra.dht.Murmur3Partitioner
+        permissions_update_interval_in_ms: 2000
+        range_request_timeout_in_ms: 10000
+        read_request_timeout_in_ms: 5000
+        request_timeout_in_ms: 10000
+        row_cache_save_period: 0
+        row_cache_size_in_mb: 0
+        rpc_keepalive: true
+        rpc_max_threads: 2048
+        rpc_min_threads: 16
+        rpc_port: 9160
+        rpc_server_type: sync
+        saved_caches_directory: /var/lib/scylla/saved_caches
+        seed_provider:
+          - class_name: org.apache.cassandra.locator.SimpleSeedProvider
+            parameters:
+              - seeds: "scylladb-0.scylladb.svc.cluster.local,scylladb-1.scylladb.svc.cluster.local,scylladb-2.scylladb.svc.cluster.local"
+        server_encryption_options:
+          certificate: /etc/scylla/certs/scylla.crt
+          keyfile: /etc/scylla/certs/scylla.key
+          truststore: /etc/scylla/certs/ca.crt
+          require_client_auth: true
+        snapshot_before_compaction: false
+        ssl_storage_port: 7001
+        start_native_transport: true
+        start_rpc: true
+        storage_port: 7000
+        thrift_framed_transport_size_in_mb: 15
+        tombstone_failure_threshold: 100000
+        tombstone_warn_threshold: 1000
+        trickle_fsync: true
+        trickle_fsync_interval_in_kb: 10240
+        truncate_request_timeout_in_ms: 60000
+        write_request_timeout_in_ms: 2000
+    
+    # Configuration de la surveillance
+    monitoring:
+      enabled: true
+      createServiceMonitor: true
+      serviceMonitor:
+        additionalLabels:
+          release: kube-prometheus-stack
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - scylladb
+            topologyKey: "kubernetes.io/hostname"
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Configuration de la politique réseau pour ScyllaDB
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-scylladb-traffic
+  namespace: scylladb
+spec:
+  description: "Allow traffic to ScyllaDB"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: scylladb
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: banadoctor-backend
+    toPorts:
+    - ports:
+      - port: "9042"
+        protocol: TCP
+      - port: "7000"
+        protocol: TCP
+      - port: "7001"
+        protocol: TCP
+      - port: "9160"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: scylladb
+    toPorts:
+    - ports:
+      - port: "7000-7001"
+        protocol: TCP
+      - port: "7199"
+        protocol: TCP
+      - port: "9042"
+        protocol: TCP
+      - port: "9160"
+        protocol: TCP
+      - port: "10000"
+        protocol: TCP
+  egress: []
+---
+# Configuration des secrets pour ScyllaDB
+apiVersion: v1
+kind: Secret
+metadata:
+  name: scylladb-secrets
+  namespace: scylladb
+type: Opaque
+data:
+  cassandra-password: ${BASE64_SCYLLADB_CASSANDRA_PASSWORD}

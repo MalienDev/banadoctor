@@ -1,0 +1,385 @@
+---
+# Installation de Thanos avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: thanos
+  namespace: monitoring
+spec:
+  repo: https://charts.bitnami.com/bitnami
+  chart: thanos
+  version: "12.8.5"
+  targetNamespace: monitoring
+  valuesContent: |-
+    # Configuration de base
+    image:
+      registry: docker.io
+      repository: bitnami/thanos
+      tag: 0.30.2
+      pullPolicy: IfNotPresent
+    
+    # Configuration des ressources globales
+    global:
+      # Configuration du stockage d'objets
+      storageClass: ""
+      
+      # Configuration des annotations
+      podAnnotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "10902"
+    
+    # Configuration de la haute disponibilité
+    highAvailability:
+      enabled: true
+      replicaCount: 2
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: 1
+        memory: 2Gi
+      requests:
+        cpu: 100m
+        memory: 512Mi
+    
+    # Configuration du stockage d'objets
+    objstoreConfig: |
+      type: S3
+      config:
+        bucket: thanos
+        endpoint: minio.banadoctor.com
+        access_key: ${MINIO_ACCESS_KEY}
+        secret_key: ${MINIO_SECRET_KEY}
+        insecure: true
+    
+    # Configuration du compactage
+    compactor:
+      enabled: true
+      retentionResolutionRaw: 30d
+      retentionResolution5m: 30d
+      retentionResolution1h: 10y
+      consistencyDelay: 30m
+      blockSyncConcurrency: 20
+      compactConcurrency: 1
+      compaction:
+        blockRanges:
+          - 2h
+          - 2h
+          - 24h
+        blockFilesConcurrency: 20
+        blockViewerGlobalSyncBlockTimeout: 2m
+        blockViewerGlobalSyncBlockConcurrency: 20
+        blockViewerBlockSyncConcurrency: 20
+      resources:
+        limits:
+          cpu: 1
+          memory: 2Gi
+        requests:
+          cpu: 100m
+          memory: 512Mi
+      persistence:
+        enabled: true
+        size: 50Gi
+        storageClass: "ssd"
+    
+    # Configuration du magasin
+    storegateway:
+      enabled: true
+      replicaCount: 2
+      shard:
+        enabled: true
+        replicationFactor: 1
+      resources:
+        limits:
+          cpu: 1
+          memory: 2Gi
+        requests:
+          cpu: 100m
+          memory: 512Mi
+      persistence:
+        enabled: true
+        size: 10Gi
+        storageClass: "ssd"
+    
+    # Configuration du receveur
+    receiver:
+      enabled: true
+      replicaCount: 2
+      config: |
+        type: HASH_RING
+        hash_ring:
+          replication_factor: 1
+          tokens:
+            - 1000000000000000000
+          members:
+            - name: thanos-receiver-0
+              addr: thanos-receiver-0.thanos-receiver.monitoring.svc.cluster.local:10901
+            - name: thanos-receiver-1
+              addr: thanos-receiver-1.thanos-receiver.monitoring.svc.cluster.local:10901
+      resources:
+        limits:
+          cpu: 1
+          memory: 2Gi
+        requests:
+          cpu: 100m
+          memory: 512Mi
+      persistence:
+        enabled: true
+        size: 10Gi
+        storageClass: "ssd"
+    
+    # Configuration du routeur de requêtes
+    query:
+      enabled: true
+      replicaCount: 2
+      dnsDiscovery:
+        enabled: true
+        sidecarsService: thanos-query-sidecar
+        sidecarsNamespace: monitoring
+      stores:
+        - thanos-storegateway.monitoring.svc.cluster.local:10901
+        - thanos-receiver.monitoring.svc.cluster.local:10901
+      resources:
+        limits:
+          cpu: 1
+          memory: 2Gi
+        requests:
+          cpu: 100m
+          memory: 512Mi
+      
+      # Configuration du tableau de bord
+      dashboard:
+        enabled: true
+        service:
+          type: ClusterIP
+          port: 9090
+      
+      # Configuration de l'ingress
+      ingress:
+        enabled: true
+        ingressClassName: nginx
+        hostname: thanos.banadoctor.com
+        path: /
+        annotations:
+          nginx.ingress.kubernetes.io/auth-type: basic
+          nginx.ingress.kubernetes.io/auth-secret: basic-auth
+          nginx.ingress.kubernetes.io/auth-realm: 'Authentication Required'
+        tls: true
+        tlsSecret: thanos-tls
+    
+    # Configuration du frontend de requêtes
+    queryFrontend:
+      enabled: true
+      replicaCount: 2
+      resources:
+        limits:
+          cpu: 1
+          memory: 2Gi
+        requests:
+          cpu: 100m
+          memory: 512Mi
+      
+      # Configuration du cache
+      queryRange:
+        enabled: true
+        config: |
+          split_queries_by_interval: "24h"
+          max_retries: 5
+          cache:
+            type: MEMCACHED
+            config:
+              addresses:
+                - thanos-memcached.monitoring.svc.cluster.local:11211
+              timeout: 1s
+              max_idle_connections: 100
+              max_async_concurrency: 20
+              max_async_buffer_size: 10000
+              max_item_size: 1MiB
+              max_get_multi_concurrency: 100
+              max_get_multi_batch_size: 0
+              dns_provider_update_interval: 10s
+    
+    # Configuration du magasin de règles
+    ruler:
+      enabled: true
+      replicaCount: 2
+      config: |
+        groups:
+          - name: thanos
+            interval: 1m
+            rules:
+              - alert: ThanosCompactMultipleRunning
+                expr: sum(thanos_compact_running{app="thanos-compact"} > 0) > 1
+                for: 5m
+                labels:
+                  severity: critical
+                annotations:
+                  description: 'Thanos Compact {{ $labels.pod }} is running in a cluster with other running compact instances.'
+                  summary: 'More than one compact instance is running in the cluster.'
+      resources:
+        limits:
+          cpu: 1
+          memory: 2Gi
+        requests:
+          cpu: 100m
+          memory: 512Mi
+      persistence:
+        enabled: true
+        size: 10Gi
+        storageClass: "ssd"
+    
+    # Configuration du bucket web
+    bucketweb:
+      enabled: true
+      resources:
+        limits:
+          cpu: 500m
+          memory: 1Gi
+        requests:
+          cpu: 50m
+          memory: 256Mi
+    
+    # Configuration du compactor
+    compactor:
+      enabled: true
+      resources:
+        limits:
+          cpu: 2
+          memory: 4Gi
+        requests:
+          cpu: 500m
+          memory: 1Gi
+      persistence:
+        enabled: true
+        size: 50Gi
+        storageClass: "ssd"
+    
+    # Configuration de la surveillance
+    serviceMonitor:
+      enabled: true
+      additionalLabels:
+        release: kube-prometheus-stack
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Configuration du magasin d'objets pour Thanos
+apiVersion: v1
+kind: Secret
+metadata:
+  name: thanos-objstore-secret
+  namespace: monitoring
+type: Opaque
+stringData:
+  objstore.yml: |
+    type: S3
+    config:
+      bucket: thanos
+      endpoint: minio.banadoctor.com
+      access_key: ${MINIO_ACCESS_KEY}
+      secret_key: ${MINIO_SECRET_KEY}
+      insecure: true
+---
+# Configuration de l'ingress pour Thanos Query
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: thanos-query
+  namespace: monitoring
+  annotations:
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: basic-auth
+    nginx.ingress.kubernetes.io/auth-realm: 'Authentication Required'
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: thanos.banadoctor.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: thanos-query
+                port:
+                  number: 9090
+  tls:
+    - hosts:
+        - thanos.banadoctor.com
+      secretName: thanos-tls
+---
+# Configuration de l'ingress pour Thanos Bucket Web
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: thanos-bucket-web
+  namespace: monitoring
+  annotations:
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: basic-auth
+    nginx.ingress.kubernetes.io/auth-realm: 'Authentication Required'
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: thanos-bucket.banadoctor.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: thanos-bucketweb
+                port:
+                  number: 8080
+  tls:
+    - hosts:
+        - thanos-bucket.banadoctor.com
+      secretName: thanos-bucket-tls
+---
+# Configuration du secret pour l'authentification de base
+apiVersion: v1
+kind: Secret
+metadata:
+  name: basic-auth
+  namespace: monitoring
+type: Opaque
+data:
+  auth: |
+    # Générer avec: htpasswd -nb admin password | openssl base64
+    YWRtaW46JGFwcjEkb2xkcGFzc3dvcmQkWE9Cb1ZkRk5vWm1acFlXNW5hVzVuYjI5dFpRPT0K
+---
+# Configuration du service pour la surveillance
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: thanos
+  namespace: monitoring
+  labels:
+    app: thanos
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: thanos
+  endpoints:
+    - port: http
+      interval: 30s
+      scrapeTimeout: 10s
+  namespaceSelector:
+    matchNames:
+      - monitoring

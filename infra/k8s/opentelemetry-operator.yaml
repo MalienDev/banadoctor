@@ -1,0 +1,264 @@
+---
+# Installation de l'opérateur OpenTelemetry avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: opentelemetry-operator
+  namespace: monitoring
+spec:
+  repo: https://open-telemetry.github.io/opentelemetry-helm-charts
+  chart: opentelemetry-operator
+  version: "0.24.0"
+  targetNamespace: monitoring
+  valuesContent: |-
+    # Configuration de l'opérateur
+    operator:
+      # Configuration des ressources
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+    
+    # Configuration du collecteur OpenTelemetry
+    opentelemetryCollector:
+      # Configuration des ressources
+      resources:
+        limits:
+          cpu: 1000m
+          memory: 2Gi
+        requests:
+          cpu: 500m
+          memory: 1Gi
+      
+      # Configuration du mode de déploiement
+      mode: deployment
+      
+      # Configuration des récepteurs
+      config:
+        receivers:
+          # Récepteur pour les métriques Prometheus
+          prometheus:
+            config:
+              global:
+                scrape_interval: 15s
+                evaluation_interval: 15s
+              scrape_configs:
+                - job_name: 'otel-collector'
+                  scrape_interval: 10s
+                  static_configs:
+                    - targets: ['0.0.0.0:8888']
+          
+          # Récepteur pour les traces Jaeger
+          jaeger:
+            protocols:
+              grpc:
+                endpoint: 0.0.0.0:14250
+              thrift_http:
+                endpoint: 0.0.0.0:14268
+              thrift_compact:
+                endpoint: 0.0.0.0:6831
+              thrift_binary:
+                endpoint: 0.0.0.0:6832
+          
+          # Récepteur pour les traces OTLP
+          otlp:
+            protocols:
+              grpc:
+                endpoint: 0.0.0.0:4317
+              http:
+                endpoint: 0.0.0.0:4318
+        
+        # Configuration des processeurs
+        processors:
+          batch:
+            send_batch_size: 10000
+            send_batch_max_size: 11000
+            timeout: 10s
+          memory_limiter:
+            check_interval: 1s
+            limit_mib: 1800
+            spike_limit_mib: 500
+        
+        # Configuration des exportateurs
+        exporters:
+          # Exportateur pour Prometheus
+          prometheus:
+            endpoint: "0.0.0.0:8889"
+            namespace: banadoctor
+            const_labels:
+              environment: production
+          
+          # Exportateur pour Jaeger
+          jaeger:
+            endpoint: "jaeger-collector.monitoring.svc.cluster.local:14250"
+            tls:
+              insecure: true
+          
+          # Exportateur pour Loki
+          loki:
+            endpoint: "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"
+            labels:
+              resource:
+                service.name: "banadoctor"
+                k8s.namespace.name: "medecin-africa"
+                k8s.pod.name: ""
+                k8s.container.name: ""
+          
+          # Exportateur pour le débogage
+          logging:
+            loglevel: debug
+        
+        # Configuration des extensions
+        extensions:
+          health_check: {}
+          pprof:
+            endpoint: 0.0.0.0:1777
+          zpages:
+            endpoint: 0.0.0.0:55679
+        
+        # Configuration du service
+        service:
+          extensions: [health_check, pprof, zpages]
+          pipelines:
+            # Pipeline pour les métriques
+            metrics:
+              receivers: [prometheus]
+              processors: [memory_limiter, batch]
+              exporters: [prometheus, logging]
+            
+            # Pipeline pour les traces
+            traces:
+              receivers: [otlp, jaeger]
+              processors: [memory_limiter, batch]
+              exporters: [jaeger, logging]
+            
+            # Pipeline pour les logs
+            logs:
+              receivers: [otlp]
+              processors: [memory_limiter, batch]
+              exporters: [loki, logging]
+    
+    # Configuration de l'auto-instrumentation
+    instrumentation:
+      # Activation de l'auto-instrumentation
+      enabled: true
+      
+      # Configuration de l'instrumentation Python
+      python:
+        image: ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-python:latest
+        env:
+          - name: OTEL_SERVICE_NAME
+            value: "banadoctor-backend"
+          - name: OTEL_RESOURCE_ATTRIBUTES
+            value: "service.namespace=medecin-africa,deployment.environment=production"
+          - name: OTEL_EXPORTER_OTLP_ENDPOINT
+            value: "http://opentelemetry-collector.monitoring.svc.cluster.local:4317"
+      
+      # Configuration de l'instrumentation Node.js
+      nodejs:
+        image: ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-nodejs:latest
+        env:
+          - name: OTEL_SERVICE_NAME
+            value: "banadoctor-frontend"
+          - name: OTEL_RESOURCE_ATTRIBUTES
+            value: "service.namespace=medecin-africa,deployment.environment=production"
+          - name: OTEL_EXPORTER_OTLP_ENDPOINT
+            value: "http://opentelemetry-collector.monitoring.svc.cluster.local:4317"
+      
+      # Configuration de l'instrumentation Java
+      java:
+        image: ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-java:latest
+        env:
+          - name: OTEL_SERVICE_NAME
+            value: "banadoctor-backend"
+          - name: OTEL_RESOURCE_ATTRIBUTES
+            value: "service.namespace=medecin-africa,deployment.environment=production"
+          - name: OTEL_EXPORTER_OTLP_ENDPOINT
+            value: "http://opentelemetry-collector.monitoring.svc.cluster.local:4317"
+      
+      # Configuration de l'instrumentation .NET
+      dotnet:
+        image: ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-dotnet:latest
+        env:
+          - name: OTEL_SERVICE_NAME
+            value: "banadoctor-backend"
+          - name: OTEL_RESOURCE_ATTRIBUTES
+            value: "service.namespace=medecin-africa,deployment.environment=production"
+          - name: OTEL_EXPORTER_OTLP_ENDPOINT
+            value: "http://opentelemetry-collector.monitoring.svc.cluster.local:4317"
+    
+    # Configuration du service
+    service:
+      type: ClusterIP
+      ports:
+        - name: otlp-grpc
+          port: 4317
+          targetPort: 4317
+          protocol: TCP
+        - name: otlp-http
+          port: 4318
+          targetPort: 4318
+          protocol: TCP
+        - name: jaeger-grpc
+          port: 14250
+          targetPort: 14250
+          protocol: TCP
+        - name: jaeger-thrift-http
+          port: 14268
+          targetPort: 14268
+          protocol: TCP
+        - name: jaeger-thrift-compact
+          port: 6831
+          targetPort: 6831
+          protocol: UDP
+        - name: jaeger-thrift-binary
+          port: 6832
+          targetPort: 6832
+          protocol: UDP
+        - name: prometheus
+          port: 8889
+          targetPort: 8889
+          protocol: TCP
+    
+    # Configuration des annotations de service
+    serviceMonitor:
+      enabled: true
+      additionalLabels:
+        release: kube-prometheus-stack
+      interval: 15s
+      scrapeTimeout: 10s
+    
+    # Configuration des ressources personnalisées
+    customResourceDefinitions:
+      create: true
+      keep: true
+    
+    # Configuration de la sécurité
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 3000
+      fsGroup: 2000
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "CriticalAddonsOnly"
+        operator: "Exists"
+      - effect: "NoSchedule"
+        key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+    
+    # Configuration des affinités
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64

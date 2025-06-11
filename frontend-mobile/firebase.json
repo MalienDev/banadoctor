@@ -1,0 +1,1 @@
+{"flutter":{"platforms":{"android":{"default":{"projectId":"bana-doctor","appId":"1:860888106652:android:ecd6057cc97a14479dcf59","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"bana-doctor","configurations":{"android":"1:860888106652:android:ecd6057cc97a14479dcf59","ios":"1:860888106652:ios:77c855f15d43e1bf9dcf59"}}}}}}

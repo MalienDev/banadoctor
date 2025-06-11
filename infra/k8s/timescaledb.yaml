@@ -1,0 +1,156 @@
+---
+# Installation de TimescaleDB avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: timescaledb-single
+  namespace: timeseries
+spec:
+  repo: https://charts.timescale.com/
+  chart: timescaledb-single
+  version: "0.19.0"
+  targetNamespace: timeseries
+  createNamespace: true
+  valuesContent: |-
+    # Configuration de base
+    image:
+      repository: timescale/timescaledb-ha
+      tag: "pg14-latest"
+      pullPolicy: IfNotPresent
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: 2
+        memory: 4Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    
+    # Configuration du nombre de répliques
+    replicaCount: 3
+    
+    # Configuration de la persistance
+    persistentVolumes:
+      data:
+        size: 100Gi
+        storageClass: "ssd"
+      wal:
+        size: 10Gi
+        storageClass: "ssd"
+    
+    # Configuration de l'authentification
+    secrets:
+      credentials:
+        POSTGRES_PASSWORD: "${TIMESCALEDB_PASSWORD}"
+        POSTGRES_USER: "postgres"
+        POSTGRES_DB: "banadoctor"
+    
+    # Configuration des paramètres PostgreSQL
+    postgresql:
+      shared_buffers: "1GB"
+      work_mem: "32MB"
+      maintenance_work_mem: "256MB"
+      effective_cache_size: "2GB"
+      max_parallel_workers_per_gather: "2"
+      max_parallel_workers: "4"
+      max_worker_processes: "8"
+      max_wal_size: "4GB"
+      min_wal_size: "2GB"
+      checkpoint_completion_target: "0.9"
+      wal_buffers: "16MB"
+      default_statistics_target: "500"
+      random_page_cost: "1.1"
+      effective_io_concurrency: "200"
+    
+    # Configuration des extensions
+    postgresqlExtensions:
+      - timescaledb
+      - pg_stat_statements
+      - pgcrypto
+      - uuid-ossp
+      - hstore
+      - postgis
+    
+    # Configuration de la haute disponibilité
+    patroni:
+      enabled: true
+      ttl: 30
+      loop_wait: 10
+      retry_timeout: 10
+      maximum_lag_on_failover: 1048576
+    
+    # Configuration de la surveillance
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        additionalLabels:
+          release: kube-prometheus-stack
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - timescaledb
+            topologyKey: "kubernetes.io/hostname"
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Configuration de la politique réseau pour TimescaleDB
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-timescaledb-traffic
+  namespace: timeseries
+spec:
+  description: "Allow traffic to TimescaleDB"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: timescaledb
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: banadoctor-backend
+    toPorts:
+    - ports:
+      - port: "5432"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: timescaledb
+    toPorts:
+    - ports:
+      - port: "5432"
+        protocol: TCP
+      - port: "8008"
+        protocol: TCP
+  egress: []
+---
+# Configuration des secrets pour TimescaleDB
+apiVersion: v1
+kind: Secret
+metadata:
+  name: timescaledb-secrets
+  namespace: timeseries
+type: Opaque
+data:
+  postgres-password: ${BASE64_TIMESCALEDB_PASSWORD}

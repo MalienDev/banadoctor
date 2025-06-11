@@ -1,0 +1,388 @@
+---
+# Installation d'OpenEBS avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: openebs
+  namespace: openebs
+spec:
+  repo: https://openebs.github.io/charts
+  chart: openebs
+  version: "3.4.0"
+  targetNamespace: openebs
+  createNamespace: true
+  valuesContent: |-
+    # Configuration de base
+    release:
+      name: openebs
+      namespace: openebs
+    
+    # Configuration des composants à installer
+    apiserver:
+      enabled: true
+      replicaCount: 2
+      image:
+        repository: openebs/m-apiserver
+        tag: 3.4.0
+        pullPolicy: IfNotPresent
+      resources:
+        limits:
+          cpu: 1
+          memory: 1Gi
+        requests:
+          cpu: 100m
+          memory: 256Mi
+    
+    provisioner:
+      enabled: true
+      replicaCount: 2
+      image:
+        repository: openebs/openebs-k8s-provisioner
+        tag: 3.4.0
+        pullPolicy: IfNotPresent
+      resources:
+        limits:
+          cpu: 1
+          memory: 1Gi
+        requests:
+          cpu: 100m
+          memory: 256Mi
+    
+    localprovisioner:
+      enabled: true
+      name: openebs-localpv-provisioner
+      image:
+        repository: openebs/provisioner-localpv
+        tag: 3.4.0
+        pullPolicy: IfNotPresent
+      resources:
+        limits:
+          cpu: 1
+          memory: 1Gi
+        requests:
+          cpu: 100m
+          memory: 256Mi
+    
+    snapshotOperator:
+      enabled: true
+      controller:
+        image:
+          repository: openebs/snapshot-controller
+          tag: 3.4.0
+          pullPolicy: IfNotPresent
+        resources:
+          limits:
+            cpu: 1
+            memory: 1Gi
+          requests:
+            cpu: 100m
+            memory: 256Mi
+      provisioner:
+        image:
+          repository: openebs/snapshot-provisioner
+          tag: 3.4.0
+          pullPolicy: IfNotPresent
+        resources:
+          limits:
+            cpu: 1
+            memory: 1Gi
+          requests:
+            cpu: 100m
+            memory: 256Mi
+    
+    ndm:
+      enabled: true
+      image:
+        repository: openebs/node-disk-manager
+        tag: 2.0.0
+        pullPolicy: IfNotPresent
+      resources:
+        limits:
+          cpu: 1
+          memory: 1Gi
+        requests:
+          cpu: 100m
+          memory: 256Mi
+    
+    ndmOperator:
+      enabled: true
+      image:
+        repository: openebs/node-disk-operator
+        tag: 2.0.0
+        pullPolicy: IfNotPresent
+      resources:
+        limits:
+          cpu: 1
+          memory: 1Gi
+        requests:
+          cpu: 100m
+          memory: 256Mi
+    
+    # Configuration des stockages
+    cstor:
+      enabled: true
+      pool:
+        image:
+          repository: openebs/cstor-pool
+          tag: 3.4.0
+          pullPolicy: IfNotPresent
+      target:
+        image:
+          repository: openebs/cstor-istgt
+          tag: 3.4.0
+          pullPolicy: IfNotPresent
+      volumeMgmt:
+        image:
+          repository: openebs/m-exporter
+          tag: 3.4.0
+          pullPolicy: IfNotPresent
+    
+    jiva:
+      enabled: true
+      replicaCount: 3
+      image:
+        repository: openebs/jiva
+        tag: 3.4.0
+        pullPolicy: IfNotPresent
+      csi:
+        nodeDriverRegistrar:
+          image:
+            repository: k8s.gcr.io/sig-storage/csi-node-driver-registrar
+            tag: v2.5.0
+        resizer:
+          image:
+            repository: k8s.gcr.io/sig-storage/csi-resizer
+            tag: v1.5.0
+        snapshotter:
+          image:
+            repository: k8s.gcr.io/sig-storage/csi-snapshotter
+            tag: v5.0.1
+        provisioner:
+          image:
+            repository: k8s.gcr.io/sig-storage/csi-provisioner
+            tag: v3.1.0
+    
+    # Configuration des stockages locaux
+    localprovisioner:
+      deviceClass:
+        hostpath:
+          enabled: true
+          path: "/var/openebs/local"
+        device:
+          enabled: true
+          path: "/var/openebs/device"
+    
+    # Configuration du monitoring
+    analytics:
+      enabled: true
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    nodeSelector:
+      openebs.io/nodegroup: storage-nodes
+---
+# Configuration des StorageClasses OpenEBS
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: openebs-cstor
+  annotations:
+    openebs.io/cas-type: cstor
+    cas.openebs.io/config: |
+      - name: StoragePoolClaim
+        value: "cstor-disk-pool"
+      - name: ReplicaCount
+        value: "3"
+      - name: FSType
+        value: "ext4"
+      - name: BlockVolumeTag
+        value: "cstor-volume"
+provisioner: cstor.csi.openebs.io
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: openebs-jiva
+  annotations:
+    openebs.io/cas-type: jiva
+    cas.openebs.io/config: |
+      - name: ReplicaCount
+        value: "3"
+      - name: StoragePool
+        value: "default"
+      - name: FSType
+        value: "ext4"
+provisioner: jiva.csi.openebs.io
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: openebs-hostpath
+  annotations:
+    openebs.io/cas-type: local
+    cas.openebs.io/config: |
+      - name: StorageType
+        value: hostpath
+      - name: BasePath
+        value: /var/openebs/local
+provisioner: openebs.io/local
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+---
+# Configuration de la politique réseau pour OpenEBS
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-openebs-traffic
+  namespace: openebs
+spec:
+  description: "Allow traffic to OpenEBS components"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: openebs
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        k8s-app: kube-controller-manager
+    toPorts:
+    - ports:
+      - port: "5656"
+        protocol: TCP
+      - port: "9500"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        k8s-app: kube-scheduler
+    toPorts:
+    - ports:
+      - port: "5656"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        k8s-app: kubelet
+    toPorts:
+    - ports:
+      - port: "5656"
+        protocol: TCP
+      - port: "9500"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: openebs
+    toPorts:
+    - ports:
+      - port: "5656"
+        protocol: TCP
+      - port: "9500"
+        protocol: TCP
+      - port: "8000"
+        protocol: TCP
+  egress: []
+---
+# Configuration des rôles et des autorisations
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: openebs-maya-operator
+rules:
+- apiGroups: ["*"]
+  resources: ["nodes", "nodes/proxy"]
+  verbs: ["*"]
+- apiGroups: ["*"]
+  resources: ["namespaces", "pods", "services", "endpoints", "events", "configmaps", "secrets"]
+  verbs: ["*"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "daemonsets", "statefulsets", "replicasets"]
+  verbs: ["*"]
+- apiGroups: ["storage.k8s.io"]
+  resources: ["storageclasses", "volumeattachments"]
+  verbs: ["*"]
+- apiGroups: ["cstor.openebs.io"]
+  resources: ["cstorpools", "cstorvolumes", "cstorvolumereplicas", "cstorbackups", "cstorrestores"]
+  verbs: ["*"]
+- apiGroups: ["openebs.io"]
+  resources: ["storagepools", "storagepoolclaims"]
+  verbs: ["*"]
+---
+# Configuration des ressources personnalisées pour OpenEBS
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: cstorpools.cstor.openebs.io
+spec:
+  group: cstor.openebs.io
+  names:
+    kind: CStorPool
+    listKind: CStorPoolList
+    plural: cstorpools
+    singular: cstorpool
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                poolSpec:
+                  type: object
+                  properties:
+                    cacheFile:
+                      type: string
+                    overProvisioning:
+                      type: boolean
+                    poolType:
+                      type: string
+                    roThresholdLimit:
+                      type: integer
+                      format: int64
+                    compression:
+                      type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                capacity:
+                  type: object
+                  properties:
+                    free:
+                      type: string
+                    total:
+                      type: string
+                    used:
+                      type: string
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      lastProbeTime:
+                        type: string
+                        format: date-time
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      message:
+                        type: string
+                      reason:
+                        type: string
+                      status:
+                        type: string
+                      type:
+                        type: string

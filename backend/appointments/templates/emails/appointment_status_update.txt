@@ -1,0 +1,18 @@
+Bonjour {{ patient.get_full_name|default:patient.email }},
+
+Le statut de votre rendez-vous du {{ appointment.scheduled_date|date:"l d F Y" }} à {{ appointment.start_time|time:"H:i" }} a été mis à jour.
+
+Nouveau statut : {{ status_display }}
+
+{% if appointment.status == 'cancelled' %}
+    Votre rendez-vous a été annulé. Si vous n'êtes pas à l'origine de cette annulation, veuillez nous contacter.
+{% elif appointment.status == 'confirmed' %}
+    Votre rendez-vous est confirmé. Nous avons hâte de vous accueillir.
+{% elif appointment.status == 'completed' %}
+    Merci pour votre confiance. N'hésitez pas à prendre un nouveau rendez-vous si nécessaire.
+{% elif appointment.status == 'rescheduled' %}
+    Votre rendez-vous a été reprogrammé. Consultez vos emails pour les nouveaux détails.
+{% endif %}
+
+Cordialement,
+L'équipe Medecin Africa

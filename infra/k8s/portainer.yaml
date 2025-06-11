@@ -1,0 +1,260 @@
+---
+# Installation de Portainer avec Helm - Configuration de production
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: portainer
+  namespace: portainer
+  labels:
+    app.kubernetes.io/name: portainer
+    app.kubernetes.io/instance: portainer
+    app.kubernetes.io/component: management
+    app.kubernetes.io/part-of: banadoctor
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "2.19.0"
+spec:
+  repo: https://portainer.github.io/k8s/
+  chart: portainer
+  version: "1.0.0"
+  targetNamespace: portainer
+  createNamespace: true
+  valuesContent: |-
+    # Configuration de base
+    image:
+      repository: portainer/portainer-ee
+      tag: 2.19.0
+      pullPolicy: IfNotPresent
+    
+    # Configuration du service
+    service:
+      type: ClusterIP
+      port: 9000
+      targetPort: 9000
+      annotations: {}
+    
+    # Configuration de l'ingress
+    ingress:
+      enabled: true
+      className: nginx
+      annotations:
+        nginx.ingress.kubernetes.io/ssl-redirect: "true"
+        nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+        nginx.ingress.kubernetes.io/proxy-body-size: "0"
+        nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+        nginx.ingress.kubernetes.io/proxy-read-timeout: "1800"
+        nginx.ingress.kubernetes.io/proxy-send-timeout: "1800"
+        nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+        nginx.ingress.kubernetes.io/configuration-snippet: |
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection "upgrade";
+          proxy_http_version 1.1;
+      hosts:
+        - host: portainer.banadoctor.com
+          paths:
+            - path: /
+              pathType: Prefix
+      tls:
+        - secretName: portainer-tls
+          hosts:
+            - portainer.banadoctor.com
+    
+    # Configuration de la persistance
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClass: longhorn
+      accessModes:
+        - ReadWriteOnce
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: 1
+        memory: 1Gi
+      requests:
+        cpu: 250m
+        memory: 512Mi
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    nodeSelector:
+      node-role.kubernetes.io/management: "true"
+    
+    # Configuration de la sécurité
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 1000
+      fsGroup: 1000
+    
+    # Configuration de la base de données
+    database:
+      type: "postgres"
+      host: "postgresql-ha-pgpool.banadoctor.svc.cluster.local"
+      port: 5432
+      name: "portainer"
+      username: "portainer"
+      passwordSecret: "portainer-db-secret"
+      sslmode: "require"
+    
+    # Configuration TLS
+    tls:
+      existingSecret: portainer-tls
+    
+    # Configuration de l'authentification
+    auth:
+      enabled: true
+      adminPassword: "" # Défini via un secret
+      adminPasswordSecret: "portainer-admin-secret"
+      oauth:
+        enabled: true
+        clientId: "portainer"
+        clientSecret: "" # Défini via un secret
+        authUrl: "https://keycloak.banadoctor.com/auth/realms/banadoctor/protocol/openid-connect/auth"
+        tokenUrl: "https://keycloak.banadoctor.com/auth/realms/banadoctor/protocol/openid-connect/token"
+        userUrl: "https://keycloak.banadoctor.com/auth/realms/banadoctor/protocol/openid-connect/userinfo"
+        scopes: "openid email profile"
+        restrictUsers: true
+        allowedDomains: "banadoctor.com"
+    
+    # Configuration des fonctionnalités entreprise
+    enterprise:
+      enabled: true
+      license: "" # Défini via un secret
+      licenseSecret: "portainer-license-secret"
+    
+    # Configuration des paramètres avancés
+    settings:
+      enableEdgeCompute: true
+      enableTelemetry: false
+      enableSnapshot: true
+      snapshotInterval: "24h"
+      templates:
+        url: "https://raw.githubusercontent.com/portainer/templates/master/templates-2.0.json"
+    
+    # Configuration des métriques
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        additionalLabels:
+          release: kube-prometheus-stack
+    
+    # Configuration des mises à jour automatiques
+    updateStrategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxUnavailable: 1
+        maxSurge: 1
+    
+    # Configuration des probes
+    livenessProbe:
+      httpGet:
+        path: /api/status
+        port: 9000
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+      successThreshold: 1
+    
+    readinessProbe:
+      httpGet:
+        path: /api/status
+        port: 9000
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
+      successThreshold: 1
+---
+# Configuration des secrets pour Portainer
+apiVersion: v1
+kind: Secret
+metadata:
+  name: portainer-db-secret
+  namespace: portainer
+type: Opaque
+data:
+  password: $(echo -n "votre_mot_de_passe_secret" | base64)
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: portainer-admin-secret
+  namespace: portainer
+type: Opaque
+data:
+  password: $(echo -n "votre_mot_de_passe_admin" | base64)
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: portainer-license-secret
+  namespace: portainer
+type: Opaque
+data:
+  license: $(echo -n "votre_licence_portainer" | base64)
+---
+# Configuration de la politique réseau pour Portainer
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-portainer-traffic
+  namespace: portainer
+spec:
+  description: "Allow traffic to Portainer"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: portainer
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+    toPorts:
+    - ports:
+      - port: "9000"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: monitoring
+    toPorts:
+    - ports:
+      - port: "9000"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: portainer
+    toPorts:
+    - ports:
+      - port: "9000"
+        protocol: TCP
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+    toPorts:
+    - ports:
+      - port: "443"
+        protocol: TCP
+  - toEndpoints:
+    - matchLabels:
+        k8s:app.kubernetes.io/name: postgresql-ha
+    toPorts:
+    - ports:
+      - port: "5432"
+        protocol: TCP
+  - toEndpoints:
+    - matchLabels:
+        k8s:app.kubernetes.io/name: keycloak
+    toPorts:
+    - ports:
+      - port: "8080"
+        protocol: TCP
+      - port: "8443"
+        protocol: TCP

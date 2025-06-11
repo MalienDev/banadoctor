@@ -1,0 +1,422 @@
+---
+# Création du namespace de monitoring
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    app: kube-prometheus-stack
+---
+# Installation du Prometheus Operator avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: kube-prometheus-stack
+  namespace: monitoring
+spec:
+  repo: https://prometheus-community.github.io/helm-charts
+  chart: kube-prometheus-stack
+  version: "41.7.4"
+  targetNamespace: monitoring
+  valuesContent: |-
+    # Configuration globale
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      scrape_timeout: 10s
+    
+    # Configuration de Prometheus
+    prometheus:
+      prometheusSpec:
+        # Configuration du stockage
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: "ssd"
+              accessModes: ["ReadWriteOnce"]
+              resources:
+                requests:
+                  storage: 100Gi
+        
+        # Configuration des ressources
+        resources:
+          requests:
+            cpu: 500m
+            memory: 2Gi
+          limits:
+            cpu: 4000m
+            memory: 8Gi
+        
+        # Configuration de la rétention des données
+        retention: 30d
+        retentionSize: "50GB"
+        
+        # Configuration des règles
+        ruleSelectorNilUsesHelmValues: false
+        ruleNamespaceSelector: {}
+        
+        # Configuration de la découverte de service
+        serviceMonitorSelectorNilUsesHelmValues: false
+        serviceMonitorNamespaceSelector: {}
+        serviceMonitorSelector: {}
+        
+        # Configuration de la surveillance des pods
+        podMonitorSelectorNilUsesHelmValues: false
+        podMonitorNamespaceSelector: {}
+        podMonitorSelector: {}
+        
+        # Configuration de la surveillance des probes
+        probeSelectorNilUsesHelmValues: false
+        probeNamespaceSelector: {}
+        probeSelector: {}
+        
+        # Configuration de la surveillance des règles personnalisées
+        additionalScrapeConfigs:
+          - job_name: 'banadoctor-apps'
+            kubernetes_sd_configs:
+              - role: endpoints
+                namespaces:
+                  names: ['medecin-africa']
+            relabel_configs:
+              - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+                action: keep
+                regex: true
+              - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+                action: replace
+                target_label: __metrics_path__
+                regex: (.+)
+              - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+                action: replace
+                regex: ([^:]+)(?::\d+)?;(\d+)
+                replacement: $1:$2
+                target_label: __address__
+              - action: labelmap
+                regex: __meta_kubernetes_service_label_(.+)
+              - source_labels: [__meta_kubernetes_namespace]
+                action: replace
+                target_label: kubernetes_namespace
+              - source_labels: [__meta_kubernetes_service_name]
+                action: replace
+                target_label: kubernetes_name
+    
+    # Configuration d'Alertmanager
+    alertmanager:
+      enabled: true
+      alertmanagerSpec:
+        # Configuration du stockage
+        storage:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: "ssd"
+              accessModes: ["ReadWriteOnce"]
+              resources:
+                requests:
+                  storage: 10Gi
+        
+        # Configuration des ressources
+        resources:
+          requests:
+            cpu: 100m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+        
+        # Configuration des récepteurs d'alerte
+        config:
+          global:
+            resolve_timeout: 5m
+            http_config: {}
+            smtp_hello: localhost
+            smtp_require_tls: true
+            pagerduty_url: https://events.pagerduty.com/v2/enqueue
+            opsgenie_api_url: https://api.opsgenie.com/
+            wechat_api_url: https://qyapi.weixin.qq.com/cgi-bin/
+            victorops_api_url: https://alert.victorops.com/integrations/generic/20131114/alert/
+          
+          route:
+            group_by: ['alertname', 'cluster', 'service']
+            group_wait: 30s
+            group_interval: 5m
+            repeat_interval: 12h
+            receiver: 'slack-notifications'
+            routes:
+            - match:
+                severity: critical
+              receiver: 'slack-critical'
+            - match:
+                severity: warning
+              receiver: 'slack-warning'
+          
+          receivers:
+          - name: 'null'
+          - name: 'slack-notifications'
+            slack_configs:
+            - api_url: '${SLACK_API_URL}'
+              channel: '#alerts'
+              send_resolved: true
+              title: '{{ template "slack.banadoctor.title" . }}'
+              text: '{{ template "slack.banadoctor.text" . }}'
+              color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+          - name: 'slack-critical'
+            slack_configs:
+            - api_url: '${SLACK_API_URL}'
+              channel: '#alerts-critical'
+              send_resolved: true
+              title: '{{ template "slack.banadoctor.title" . }}'
+              text: '{{ template "slack.banadoctor.text" . }}'
+              color: 'danger'
+          - name: 'slack-warning'
+            slack_configs:
+            - api_url: '${SLACK_API_URL}'
+              channel: '#alerts-warning'
+              send_resolved: true
+              title: '{{ template "slack.banadoctor.title" . }}'
+              text: '{{ template "slack.banadoctor.text" . }}'
+              color: 'warning'
+          - name: 'email'
+            email_configs:
+            - to: 'alerts@banadoctor.com'
+              send_resolved: true
+              from: 'alertmanager@banadoctor.com'
+              smarthost: 'smtp.gmail.com:587'
+              auth_username: 'alertmanager@banadoctor.com'
+              auth_identity: 'alertmanager@banadoctor.com'
+              auth_password: '${SMTP_PASSWORD}'
+              headers:
+                subject: '{{ template "email.banadoctor.subject" . }}'
+              html: '{{ template "email.banadoctor.html" . }}'
+    
+    # Configuration de Grafana
+    grafana:
+      enabled: true
+      adminPassword: "${GRAFANA_ADMIN_PASSWORD}"
+      persistence:
+        enabled: true
+        storageClassName: "ssd"
+        accessModes: ["ReadWriteOnce"]
+        size: 10Gi
+      datasources:
+        datasources.yaml:
+          apiVersion: 1
+          datasources:
+          - name: Prometheus
+            type: prometheus
+            url: http://prometheus-operated.monitoring.svc:9090
+            access: proxy
+            isDefault: true
+            jsonData:
+              timeInterval: "5s"
+          - name: Loki
+            type: loki
+            url: http://loki.monitoring.svc:3100
+            access: proxy
+            jsonData:
+              maxLines: 1000
+      dashboardProviders:
+        dashboardproviders.yaml:
+          apiVersion: 1
+          providers:
+          - name: 'default'
+            orgId: 1
+            folder: ''
+            type: file
+            disableDeletion: false
+            editable: true
+            options:
+              path: /var/lib/grafana/dashboards/default
+      dashboards:
+        default:
+          # Tableaux de bord Kubernetes
+          k8s-cluster:
+            gnetId: 315
+            revision: 2
+            datasource: Prometheus
+          k8s-resources:
+            gnetId: 6417
+            revision: 1
+            datasource: Prometheus
+          k8s-apiserver:
+            gnetId: 12006
+            revision: 1
+            datasource: Prometheus
+          # Tableaux de bord pour les applications
+          banadoctor-backend:
+            gnetId: 11800
+            revision: 1
+            datasource: Prometheus
+          banadoctor-frontend:
+            gnetId: 11074
+            revision: 1
+            datasource: Prometheus
+          # Tableaux de bord pour les bases de données
+          postgresql:
+            gnetId: 9628
+            revision: 1
+            datasource: Prometheus
+          redis:
+            gnetId: 11835
+            revision: 1
+            datasource: Prometheus
+          elasticsearch:
+            gnetId: 2322
+            revision: 1
+            datasource: Prometheus
+    
+    # Configuration de Kube State Metrics
+    kubeStateMetrics:
+      enabled: true
+      resources:
+        limits:
+          cpu: 100m
+          memory: 128Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi
+    
+    # Configuration de Node Exporter
+    nodeExporter:
+      enabled: true
+      resources:
+        limits:
+          cpu: 100m
+          memory: 128Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi
+    
+    # Configuration de Prometheus Node Exporter
+    prometheus-node-exporter:
+      enabled: true
+      resources:
+        limits:
+          cpu: 100m
+          memory: 128Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi
+    
+    # Configuration de Prometheus Operator
+    prometheusOperator:
+      enabled: true
+      image:
+        repository: quay.io/prometheus-operator/prometheus-operator
+        tag: v0.55.1
+      resources:
+        limits:
+          cpu: 200m
+          memory: 256Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      serviceMonitor:
+        selfMonitor: true
+      admissionWebhooks:
+        enabled: true
+        patch:
+          enabled: true
+          image:
+            repository: jettech/kube-webhook-certgen
+            tag: v1.5.0
+    
+    # Configuration de la surveillance des règles personnalisées
+    defaultRules:
+      create: true
+      rules:
+        alertmanager: true
+        etcd: true
+        general: true
+        k8s: true
+        kubeApiserver: true
+        kubePrometheusNodeAlerting: true
+        kubePrometheusNodeRecording: true
+        kubernetesAbsent: true
+        kubernetesApps: true
+        kubernetesResources: true
+        kubernetesStorage: true
+        kubernetesSystem: true
+        network: true
+        node: true
+        prometheus: true
+        prometheusOperator: true
+    
+    # Configuration des règles d'alerte personnalisées
+    additionalPrometheusRules:
+      - name: banadoctor-rules
+        groups:
+          - name: banadoctor-app
+            rules:
+              - alert: HighErrorRate
+                expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.1
+                for: 10m
+                labels:
+                  severity: critical
+                annotations:
+                  summary: High error rate on {{ $labels.instance }}
+                  description: "Error rate is {{ $value }}% for {{ $labels.instance }}"
+              - alert: HighLatency
+                expr: histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 1
+                for: 10m
+                labels:
+                  severity: warning
+                annotations:
+                  summary: High latency on {{ $labels.instance }}
+                  description: "P99 latency is {{ $value }}s for {{ $labels.instance }}"
+    
+    # Configuration des ServiceMonitors
+    additionalServiceMonitors:
+      - name: banadoctor-backend
+        additionalLabels:
+          release: kube-prometheus-stack
+        namespaceSelector:
+          matchNames:
+            - medecin-africa
+        selector:
+          matchLabels:
+            app: banadoctor-backend
+        endpoints:
+          - port: metrics
+            interval: 15s
+            path: /metrics
+      - name: banadoctor-frontend
+        additionalLabels:
+          release: kube-prometheus-stack
+        namespaceSelector:
+          matchNames:
+            - medecin-africa
+        selector:
+          matchLabels:
+            app: banadoctor-frontend
+        endpoints:
+          - port: metrics
+            interval: 15s
+            path: /metrics
+    
+    # Configuration des PodMonitors
+    additionalPodMonitors:
+      - name: banadoctor-backend-pods
+        additionalLabels:
+          release: kube-prometheus-stack
+        namespaceSelector:
+          matchNames:
+            - medecin-africa
+        selector:
+          matchLabels:
+            app: banadoctor-backend
+        podMetricsEndpoints:
+          - port: metrics
+            interval: 15s
+            path: /metrics
+      - name: banadoctor-frontend-pods
+        additionalLabels:
+          release: kube-prometheus-stack
+        namespaceSelector:
+          matchNames:
+            - medecin-africa
+        selector:
+          matchLabels:
+            app: banadoctor-frontend
+        podMetricsEndpoints:
+          - port: metrics
+            interval: 15s
+            path: /metrics

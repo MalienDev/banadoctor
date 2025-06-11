@@ -1,0 +1,309 @@
+---
+# Installation de KubeVirt avec Operator Lifecycle Manager (OLM)
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: kubevirt-operatorgroup
+  namespace: kubevirt
+  labels:
+    app: kubevirt
+    app.kubernetes.io/name: kubevirt
+    app.kubernetes.io/instance: kubevirt
+    app.kubernetes.io/component: virtualization
+    app.kubernetes.io/part-of: banadoctor
+spec:
+  targetNamespaces:
+    - kubevirt
+---
+
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: kubevirt-operator
+  namespace: kubevirt
+  labels:
+    operators.coreos.com/kubevirt-operator.kubevirt: ""
+spec:
+  channel: stable
+  installPlanApproval: Automatic
+  name: kubevirt-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+---
+
+# Configuration de KubeVirt
+apiVersion: kubevirt.io/v1
+kind: KubeVirt
+metadata:
+  name: kubevirt
+  namespace: kubevirt
+  labels:
+    app: kubevirt
+    app.kubernetes.io/name: kubevirt
+    app.kubernetes.io/instance: kubevirt
+    app.kubernetes.io/component: virtualization
+    app.kubernetes.io/part-of: banadoctor
+spec:
+  certificateRotateStrategy: {}
+  configuration:
+    developerConfiguration:
+      featureGates:
+        - DataVolumes
+        - CPUManager
+        - LiveMigration
+        - GPU
+        - HostDevices
+        - Snapshot
+        - HotplugVolumes
+  customizeComponents: {}
+  imagePullPolicy: IfNotPresent
+  workloadUpdateStrategy: {}
+  workloadUpdateStrategy:
+    batchEvictionSize: 10
+    batchEvictionInterval: "1m0s"
+  
+  # Configuration des ressources
+  resources:
+    limits:
+      cpu: 4000m
+      memory: 8Gi
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+  
+  # Configuration de la surveillance
+  monitorNamespace: ""
+  monitorAccount: ""
+  
+  # Configuration du réseau
+  network:
+    networkInterface: bridge
+    permitSlirpInterface: true
+  
+  # Configuration des fonctionnalités
+  permittedHostDevices:
+    pciHostDevices:
+      - pciDeviceSelector: "10de:1b06"  # NVIDIA GPU
+        resourceName: "nvidia.com/gpu"
+      - pciDeviceSelector: "1002:67df"  # AMD GPU
+        resourceName: "amd.com/gpu"
+  
+  # Configuration de la mise à l'échelle
+  scaling:
+    replicas: 2
+  
+  # Configuration du stockage
+  storage:
+    hostDisk:
+      path: "/var/lib/kubelet/device-plugins"
+      type: DirectoryOrCreate
+  
+  # Configuration des tolérances
+  tolerations:
+    - key: "kubevirt.io/drain"
+      operator: "Exists"
+      effect: "NoSchedule"
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
+    - key: "node-role.kubernetes.io/compute"
+      operator: "Exists"
+      effect: "NoSchedule"
+  
+  # Configuration des versions
+  version: "v1.0.0"
+
+---
+# Configuration de Containerized Data Importer (CDI) pour la gestion des disques
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: CDI
+metadata:
+  name: cdi
+  namespace: cdi
+  labels:
+    app: containerized-data-importer
+    app.kubernetes.io/name: cdi
+    app.kubernetes.io/instance: cdi
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: banadoctor
+spec:
+  imagePullPolicy: IfNotPresent
+  config:
+    featureGates:
+      - DataVolumes
+      - CPUManager
+      - LiveMigration
+      - GPU
+      - HostDevices
+      - Snapshot
+      - HotplugVolumes
+  customizeComponents: {}
+  certConfig:
+    ca:
+      duration: 48h0m0s
+      renewBefore: 24h0m0s
+    server:
+      duration: 24h0m0s
+      renewBefore: 12h0m0s
+  priorityClass: system-cluster-critical
+  storage:
+    scratchSpaceStorageClass: longhorn
+    podResourceRequirements: {}
+    filesystemOverhead:
+      global: "0.05"
+      storageClass:
+        longhorn: "0.1"
+  
+  # Configuration des ressources
+  resources:
+    limits:
+      cpu: "2"
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+  
+  # Configuration des tolérances
+  tolerations:
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
+    - key: "node-role.kubernetes.io/compute"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+---
+# Configuration de la politique réseau pour KubeVirt
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-kubevirt-traffic
+  namespace: kubevirt
+spec:
+  description: "Allow traffic to KubeVirt components"
+  endpointSelector:
+    matchLabels:
+      kubevirt.io: ""
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+    toPorts:
+    - ports:
+      - port: "443"
+        protocol: TCP
+      - port: "8443"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        k8s:app: kubevirt
+    toPorts:
+    - ports:
+      - port: "8443"
+        protocol: TCP
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+    toPorts:
+    - ports:
+      - port: "443"
+        protocol: TCP
+      - port: "53"
+        protocol: UDP
+  - toEndpoints:
+    - matchLabels:
+        k8s:app: cdi-uploadproxy
+    toPorts:
+    - ports:
+      - port: "443"
+        protocol: TCP
+
+---
+# Configuration des rôles et des autorisations pour KubeVirt
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubevirt-admin
+  labels:
+    app: kubevirt
+    app.kubernetes.io/name: kubevirt
+    app.kubernetes.io/instance: kubevirt
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: banadoctor
+rules:
+- apiGroups: ["kubevirt.io"]
+  resources: ["virtualmachines", "virtualmachineinstances", "virtualmachineinstancereplicasets", "virtualmachineinstancemigrations"]
+  verbs: ["*"]
+- apiGroups: ["cdi.kubevirt.io"]
+  resources: ["datavolumes", "datavolumes/source", "datavolumes/status"]
+  verbs: ["*"]
+- apiGroups: ["subresources.kubevirt.io"]
+  resources: ["virtualmachineinstances/console", "virtualmachineinstances/vnc", "virtualmachineinstances/restart"]
+  verbs: ["*"]
+
+---
+# Configuration du stockage pour les machines virtuelles
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: kubevirt-disks
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+  labels:
+    app.kubernetes.io/name: kubevirt
+    app.kubernetes.io/instance: kubevirt
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: banadoctor
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+
+---
+# Exemple de configuration de machine virtuelle
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: example-vm
+  namespace: default
+  labels:
+    app.kubernetes.io/name: example-vm
+    app.kubernetes.io/instance: example-vm
+    app.kubernetes.io/component: vm
+    app.kubernetes.io/part-of: banadoctor
+spec:
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/domain: example-vm
+    spec:
+      domain:
+        cpu:
+          cores: 2
+          sockets: 1
+          threads: 1
+        devices:
+          disks:
+            - name: containerdisk
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+          interfaces:
+          - name: default
+            masquerade: {}
+        resources:
+          requests:
+            memory: 2Gi
+      networks:
+      - name: default
+        pod: {}
+      terminationGracePeriodSeconds: 0
+      volumes:
+        - name: containerdisk
+          containerDisk:
+            image: kubevirt/fedora-cloud-container-disk-demo
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userDataBase64: IyEvYmluL2Jhc2gKCmVjaG8gIkhlbGxvIGZyb20gS3ViZVZpcnQgVk0iCg==

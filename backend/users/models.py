@@ -1,225 +1,146 @@
-from django.contrib.gis.db import models as gis_models
-from django.contrib.auth.models import AbstractUser
-from django.conf import settings
+from django.conf import settings # Import settings
+from django.contrib.auth.models import AbstractUser, BaseUserManager
+from django.db import models
 from django.utils.translation import gettext_lazy as _
 
+# Define a simple fallback for PointField when GIS is not available
+class FallbackPointField(models.CharField):
+    def __init__(self, *args, **kwargs):
+        kwargs.pop('geography', None)  # Remove unsupported kwarg for CharField
+        kwargs.setdefault('max_length', 255)  # Default max_length for CharField
+        kwargs.setdefault('null', True)
+        kwargs.setdefault('blank', True)
+        super().__init__(*args, **kwargs)
+
+# Try to import GIS models, fall back to regular models if not available
+try:
+    from django.contrib.gis.db import models as gis_models_real
+    PointField = gis_models_real.PointField
+    USING_GIS = True
+except (ImportError, ModuleNotFoundError):
+    PointField = FallbackPointField
+    USING_GIS = False
+
+
+class UserManager(BaseUserManager):
+    """Custom user model manager where email is the unique identifier."""
+    def create_user(self, email, password=None, **extra_fields):
+        if not email:
+            raise ValueError(_('The Email must be set'))
+        email = self.normalize_email(email)
+        user = self.model(email=email, **extra_fields)
+        user.set_password(password)
+        user.save(using=self._db)
+        return user
+
+    def create_superuser(self, email, password, **extra_fields):
+        extra_fields.setdefault('is_staff', True)
+        extra_fields.setdefault('is_superuser', True)
+        extra_fields.setdefault('is_active', True)
+
+        if extra_fields.get('is_staff') is not True:
+            raise ValueError(_('Superuser must have is_staff=True.'))
+        if extra_fields.get('is_superuser') is not True:
+            raise ValueError(_('Superuser must have is_superuser=True.'))
+        return self.create_user(email, password, **extra_fields)
 
 class User(AbstractUser):
-    """Custom user model that extends the default User model with additional fields."""
-    is_medecin = models.BooleanField(
-        _('medecin status'),
-        default=False,
-        help_text=_('Designates whether the user is a doctor or not.')
+    """Custom user model that supports using email instead of username"""
+    USER_TYPE_CHOICES = (
+        ('patient', 'Patient'),
+        ('doctor', 'Doctor'),
+        ('admin', 'Admin'),
     )
-    phone_number = models.CharField(
-        _('phone number'),
-        max_length=15,
-        blank=True,
-        help_text=_('User\'s phone number for communication')
+    
+    GENDER_CHOICES = (
+        ('M', 'Male'),
+        ('F', 'Female'),
+        ('O', 'Other'),
     )
-    date_of_birth = models.DateField(
-        _('date of birth'),
-        null=True,
-        blank=True,
-        help_text=_('User\'s date of birth')
-    )
-    gender = models.CharField(
-        _('gender'),
-        max_length=10,
-        choices=[
-            ('M', _('Male')),
-            ('F', _('Female')),
-            ('O', _('Other')),
-        ],
-        blank=True,
-        help_text=_('User\'s gender')
-    )
-    address = models.TextField(
-        _('address'),
-        blank=True,
-        help_text=_('User\'s physical address')
-    )
-    city = models.CharField(
-        _('city'),
-        max_length=100,
-        blank=True,
-        help_text=_('User\'s city of residence')
-    )
-    country = models.CharField(
-        _('country'),
-        max_length=100,
-        default='Senegal',
-        help_text=_('User\'s country of residence')
-    )
-    location = gis_models.PointField(
-        _('location'),
-        null=True,
-        blank=True,
-        srid=4326,
-        help_text=_('Geographic location (longitude and latitude)')
-    )
-    profile_picture = models.ImageField(
-        _('profile picture'),
-        upload_to='profile_pics/',
-        null=True,
-        blank=True,
-        help_text=_('User\'s profile picture')
-    )
+    
+    # Remove username field, use email instead
+    username = None
+    email = models.EmailField(_('email address'), unique=True)
+    user_type = models.CharField(max_length=10, choices=USER_TYPE_CHOICES, default='patient')
+    phone_number = models.CharField(max_length=20, blank=True, null=True)
+    date_of_birth = models.DateField(null=True, blank=True)
+    gender = models.CharField(max_length=1, choices=GENDER_CHOICES, blank=True, null=True)
+    profile_picture = models.ImageField(upload_to='profile_pics/', null=True, blank=True)
+    is_verified = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        verbose_name = _('user')
-        verbose_name_plural = _('users')
-        ordering = ['-date_joined']
-
+    
+    # For doctors
+    specialization = models.CharField(max_length=100, blank=True, null=True)
+    license_number = models.CharField(max_length=50, blank=True, null=True)
+    years_of_experience = models.PositiveIntegerField(null=True, blank=True)
+    bio = models.TextField(blank=True, null=True)
+    consultation_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    
+    # Location fields
+    address = models.TextField(blank=True, null=True)
+    city = models.CharField(max_length=100, blank=True, null=True)
+    country = models.CharField(max_length=100, blank=True, null=True)
+    location = PointField(geography=True, null=True, blank=True) # Use the conditionally defined PointField
+    
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = []
+    
+    objects = UserManager()
+    
     def __str__(self):
-        return f"{self.get_full_name() or self.username} ({'Doctor' if self.is_medecin else 'Patient'})"
-
-
-class DoctorProfile(models.Model):
-    """Extended profile for doctors with professional information."""
-    user = models.OneToOneField(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name='doctor_profile',
-        limit_choices_to={'is_medecin': True}
-    )
-    specialization = models.CharField(
-        _('specialization'),
-        max_length=100,
-        help_text=_('Medical specialization of the doctor')
-    )
-    license_number = models.CharField(
-        _('license number'),
-        max_length=50,
-        unique=True,
-        help_text=_('Medical license number')
-    )
-    years_of_experience = models.PositiveIntegerField(
-        _('years of experience'),
-        default=0,
-        help_text=_('Number of years of professional experience')
-    )
-    bio = models.TextField(
-        _('biography'),
-        blank=True,
-        help_text=_('Professional biography and qualifications')
-    )
-    consultation_fee = models.DecimalField(
-        _('consultation fee'),
-        max_digits=10,
-        decimal_places=2,
-        default=0.00,
-        help_text=_('Standard consultation fee in local currency')
-    )
-    languages = models.JSONField(
-        _('languages spoken'),
-        default=list,
-        help_text=_('List of languages spoken by the doctor')
-    )
-    is_available = models.BooleanField(
-        _('available for appointments'),
-        default=True,
-        help_text=_('Whether the doctor is currently accepting new patients')
-    )
-    rating = models.FloatField(
-        _('rating'),
-        default=0.0,
-        help_text=_('Average rating from patient reviews')
-    )
-    review_count = models.PositiveIntegerField(
-        _('review count'),
-        default=0,
-        help_text=_('Total number of reviews received')
-    )
-
-    class Meta:
-        verbose_name = _('doctor profile')
-        verbose_name_plural = _('doctor profiles')
-
-    def __str__(self):
-        return f"{self.user.get_full_name()} - {self.specialization}"
-
-
-class PatientProfile(models.Model):
-    """Extended profile for patients with medical information."""
-    BLOOD_GROUPS = [
-        ('A+', 'A+'), ('A-', 'A-'),
-        ('B+', 'B+'), ('B-', 'B-'),
-        ('AB+', 'AB+'), ('AB-', 'AB-'),
-        ('O+', 'O+'), ('O-', 'O-'),
-    ]
-
-    user = models.OneToOneField(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name='patient_profile',
-        limit_choices_to={'is_medecin': False}
-    )
-    blood_group = models.CharField(
-        _('blood group'),
-        max_length=3,
-        choices=BLOOD_GROUPS,
-        blank=True,
-        help_text=_('Patient\'s blood group')
-    )
-    height = models.DecimalField(
-        _('height (cm)'),
-        max_digits=5,
-        decimal_places=2,
-        null=True,
-        blank=True,
-        help_text=_('Height in centimeters')
-    )
-    weight = models.DecimalField(
-        _('weight (kg)'),
-        max_digits=5,
-        decimal_places=2,
-        null=True,
-        blank=True,
-        help_text=_('Weight in kilograms')
-    )
-    allergies = models.TextField(
-        _('allergies'),
-        blank=True,
-        help_text=_('Any known allergies')
-    )
-    medical_history = models.TextField(
-        _('medical history'),
-        blank=True,
-        help_text=_('Summary of medical history')
-    )
-    current_medications = models.TextField(
-        _('current medications'),
-        blank=True,
-        help_text=_('Current medications being taken')
-    )
-    emergency_contact_name = models.CharField(
-        _('emergency contact name'),
-        max_length=100,
-        blank=True,
-        help_text=_('Name of emergency contact person')
-    )
-    emergency_contact_phone = models.CharField(
-        _('emergency contact phone'),
-        max_length=15,
-        blank=True,
-        help_text=_('Phone number of emergency contact person')
-    )
-
-    class Meta:
-        verbose_name = _('patient profile')
-        verbose_name_plural = _('patient profiles')
-
-    def __str__(self):
-        return f"{self.user.get_full_name()} - Patient"
-
+        return self.get_full_name() or self.email
+    
     @property
-    def bmi(self):
-        """Calculate and return the Body Mass Index (BMI)."""
-        if self.height and self.weight:
-            # Convert height from cm to meters
-            height_m = float(self.height) / 100
-            return round(float(self.weight) / (height_m * height_m), 1)
-        return None
+    def is_doctor(self):
+        return self.user_type == 'doctor'
+    
+    @property
+    def is_patient(self):
+        return self.user_type == 'patient'
+
+class DoctorAvailability(models.Model):
+    """Model to store doctor's availability schedule"""
+    DAYS_OF_WEEK = (
+        (0, 'Monday'),
+        (1, 'Tuesday'),
+        (2, 'Wednesday'),
+        (3, 'Thursday'),
+        (4, 'Friday'),
+        (5, 'Saturday'),
+        (6, 'Sunday'),
+    )
+    
+    doctor = models.ForeignKey(User, on_delete=models.CASCADE, related_name='availabilities')
+    day_of_week = models.IntegerField(choices=DAYS_OF_WEEK)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    is_available = models.BooleanField(default=True)
+    
+    class Meta:
+        verbose_name_plural = 'Doctor Availabilities'
+        unique_together = ('doctor', 'day_of_week', 'start_time', 'end_time')
+    
+    def __str__(self):
+        return f"{self.doctor.get_full_name()} - {self.get_day_of_week_display()} {self.start_time} to {self.end_time}"
+
+class DoctorSpecialization(models.Model):
+    """Model to store doctor specializations"""
+    name = models.CharField(max_length=100, unique=True)
+    description = models.TextField(blank=True, null=True)
+    
+    def __str__(self):
+        return self.name
+
+class DoctorEducation(models.Model):
+    """Model to store doctor's education background"""
+    doctor = models.ForeignKey(User, on_delete=models.CASCADE, related_name='educations')
+    degree = models.CharField(max_length=200)
+    institution = models.CharField(max_length=200)
+    year_completed = models.PositiveIntegerField()
+    
+    class Meta:
+        verbose_name_plural = 'Doctor Educations'
+    
+    def __str__(self):
+        return f"{self.degree} - {self.institution} ({self.year_completed})"

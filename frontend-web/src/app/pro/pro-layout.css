@@ -1,0 +1,101 @@
+body {
+  background: var(--background);
+  color: #000000;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Layout principal */
+.pro-layout {
+  display: flex;
+  min-height: 100vh;
+  background-color: #f5f7fa;
+}
+
+/* Sidebar */
+.pro-sidebar {
+  width: 250px;
+  background-color: #1e293b;
+  color: white;
+  padding: 1.5rem 0;
+  position: fixed;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.pro-sidebar .logo {
+  font-size: 1.5rem;
+  font-weight: bold;
+  padding: 0 1.5rem 2rem;
+  border-bottom: 1px solid #334155;
+  margin-bottom: 1.5rem;
+}
+
+.pro-sidebar ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.pro-sidebar li {
+  margin: 0.5rem 0;
+}
+
+.pro-sidebar a {
+  display: block;
+  color: #e2e8f0;
+  padding: 0.75rem 1.5rem;
+  text-decoration: none;
+  transition: all 0.2s;
+}
+
+.pro-sidebar a:hover,
+.pro-sidebar a.active {
+  background-color: #334155;
+  color: white;
+}
+
+/* Contenu principal */
+.pro-content {
+  flex: 1;
+  margin-left: 250px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* En-tête */
+.pro-header {
+  background-color: white;
+  padding: 1rem 2rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.user-info button {
+  background-color: #3b82f6;
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.user-info button:hover {
+  background-color: #2563eb;
+}
+
+/* Conteneur principal */
+.main-container {
+  flex: 1;
+  padding: 2rem;
+  background-color: #f5f7fa;
+}

@@ -1,0 +1,136 @@
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: medecin-africa
+spec:
+  # Exécution quotidienne à 2h du matin
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          # Utilisation d'un service account avec les bonnes permissions
+          serviceAccountName: backup-sa
+          restartPolicy: OnFailure
+          containers:
+          - name: postgres-backup
+            image: postgres:13-alpine
+            # Installation des dépendances nécessaires
+            command: ["/bin/sh", "-c"]
+            args:
+            - |
+              apk add --no-cache postgresql-client gnupg aws-cli && \
+              chmod +x /scripts/postgres-backup.sh && \
+              /scripts/postgres-backup.sh
+            # Montage du script de sauvegarde
+            volumeMounts:
+            - name: backup-scripts
+              mountPath: /scripts
+            # Variables d'environnement
+            envFrom:
+            - secretRef:
+                name: postgres-secrets
+            - secretRef:
+                name: aws-credentials
+            - configMapRef:
+                name: backup-config
+            # Ressources allouées
+            resources:
+              limits:
+                cpu: "500m"
+                memory: "512Mi"
+              requests:
+                cpu: "100m"
+                memory: "128Mi"
+            # Configuration des probes
+            livenessProbe:
+              exec:
+                command: ["pg_isready", "-U", "postgres"]
+              initialDelaySeconds: 30
+              periodSeconds: 10
+            readinessProbe:
+              exec:
+                command: ["pg_isready", "-U", "postgres"]
+              initialDelaySeconds: 5
+              periodSeconds: 5
+          # Volumes
+          volumes:
+          - name: backup-scripts
+            configMap:
+              name: backup-scripts
+              defaultMode: 0744
+          # Tolerations pour les nœuds dédiés aux sauvegardes
+          tolerations:
+          - key: "backup"
+            operator: "Exists"
+            effect: "NoSchedule"
+          # Affinité pour les nœuds de sauvegarde
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - key: role
+                    operator: In
+                    values:
+                    - backup
+---
+# Configuration des scripts de sauvegarde
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-scripts
+  namespace: medecin-africa
+data:
+  postgres-backup.sh: |
+    #!/bin/bash
+    # Le contenu du script sera monté depuis le fichier local
+---
+# Configuration des sauvegardes
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-config
+  namespace: medecin-africa
+data:
+  S3_BUCKET: "banadoctor-backups"
+  S3_REGION: "eu-west-1"
+  ENCRYPTION_KEY: "${ENCRYPTION_KEY}"  # À remplacer par une clé sécurisée
+---
+# Service Account pour les sauvegardes
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backup-sa
+  namespace: medecin-africa
+---
+# Rôle pour le service account de sauvegarde
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: backup-role
+  namespace: medecin-africa
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/exec", "pods/log"]
+  verbs: ["get", "list", "create", "delete"]
+- apiGroups: ["batch"]
+  resources: ["jobs", "cronjobs"]
+  verbs: ["get", "list", "watch", "create", "update", "delete"]
+---
+# Liaison du rôle au service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: backup-role-binding
+  namespace: medecin-africa
+subjects:
+- kind: ServiceAccount
+  name: backup-sa
+  namespace: medecin-africa
+roleRef:
+  kind: Role
+  name: backup-role
+  apiGroup: rbac.authorization.k8s.io

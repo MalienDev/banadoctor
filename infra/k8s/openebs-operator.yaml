@@ -1,0 +1,300 @@
+---
+# Installation d'OpenEBS avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: openebs
+  namespace: openebs
+spec:
+  repo: https://openebs.github.io/charts
+  chart: openebs
+  version: "3.3.0"
+  targetNamespace: openebs
+  createNamespace: true
+  valuesContent: |-
+    # Configuration de base
+    release:
+      name: openebs
+      namespace: openebs
+    
+    # Configuration de l'opérateur
+    operator:
+      image:
+        repository: openebs/m-apiserver
+        tag: 3.3.0
+        pullPolicy: IfNotPresent
+      resources:
+        limits:
+          cpu: 1000m
+          memory: 1Gi
+        requests:
+          cpu: 100m
+          memory: 256Mi
+    
+    # Configuration du provisionner
+    provisioner:
+      image:
+        repository: openebs/openebs-k8s-provisioner
+        tag: 3.3.0
+      resources:
+        limits:
+          cpu: 1000m
+          memory: 1Gi
+        requests:
+          cpu: 100m
+          memory: 256Mi
+    
+    # Configuration de localpv-provisioner
+    localprovisioner:
+      enabled: true
+      image:
+        repository: openebs/provisioner-localpv
+        tag: 3.3.0
+      resources:
+        limits:
+          cpu: 1000m
+          memory: 1Gi
+        requests:
+          cpu: 100m
+          memory: 256Mi
+      
+      # Configuration des nœuds
+      nodeSelector:
+        openebs.io/nodeid: ${NODE_NAME}
+      
+      # Configuration des tolérances
+      tolerations:
+        - effect: NoSchedule
+          key: node-role.kubernetes.io/control-plane
+          operator: Exists
+        - effect: NoSchedule
+          key: node-role.kubernetes.io/master
+          operator: Exists
+    
+    # Configuration de NDM (Node Device Manager)
+    ndm:
+      enabled: true
+      image:
+        repository: openebs/node-disk-manager
+        tag: 2.0.0
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+      
+      # Filtrage des périphériques
+      filterConfigs:
+        os-disk-exclude-filter: |
+          exclude: "/dev/loop,/dev/fd0,/dev/sr0,/dev/ram,/dev/dm-,/dev/md,/dev/rbd,/dev/zd"
+        vendor-filter: |
+          exclude: "CLOUDBYT,OpenEBS"
+        path-filter: |
+          exclude: "loop,fd0,sr0,ram,md,md-,dm-,rbd,zd"
+    
+    # Configuration de NDM Operator
+    ndmOperator:
+      enabled: true
+      image:
+        repository: openebs/node-disk-operator
+        tag: 2.0.0
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 128Mi
+    
+    # Configuration du stockage local
+    localprovisioner:
+      deviceClass:
+        hostpath:
+          enabled: true
+          path: "/var/openebs/local"
+        device:
+          enabled: true
+    
+    # Configuration des classes de stockage
+    defaultStorageConfig:
+      enabled: true
+      storageClass:
+        enabled: true
+        isDefaultClass: false
+        name: openebs-hostpath
+        reclaimPolicy: Delete
+        fsType: ext4
+        volumeBindingMode: WaitForFirstConsumer
+    
+    # Configuration des fonctionnalités expérimentales
+    featureGates:
+      # Activer les fonctionnalités expérimentales
+      GPTBasedUUID: "true"
+      APIService: "true"
+      Analytics: "true"
+      # Désactiver les fonctionnalités non nécessaires
+      CStor: "false"
+      Jiva: "false"
+      LVM: "false"
+      ZFSScraping: "false"
+      ZFSScrape: "false"
+    
+    # Configuration des ressources globales
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+    
+    # Configuration de la haute disponibilité
+    highAvailability:
+      enabled: true
+      replicaCount: 2
+    
+    # Configuration de la surveillance
+    monitoring:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        namespace: monitoring
+        additionalLabels:
+          release: kube-prometheus-stack
+    
+    # Configuration de la journalisation
+    logLevel: 4
+    
+    # Configuration des tolérances
+    tolerations:
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/control-plane
+        operator: Exists
+      - effect: NoSchedule
+        key: node-role.kubernetes.io/master
+        operator: Exists
+    
+    # Configuration des affinités
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Configuration de la classe de stockage HostPath
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: openebs-hostpath
+  annotations:
+    openebs.io/cas-type: local
+    cas.openebs.io/config: |
+      - name: StorageType
+        value: "hostpath"
+      - name: BasePath
+        value: "/var/openebs/local/"
+provisioner: openebs.io/local
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+---
+# Configuration de la classe de stockage Device
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: openebs-device
+  annotations:
+    openebs.io/cas-type: local
+    cas.openebs.io/config: |
+      - name: StorageType
+        value: "device"
+      - name: FSType
+        value: "ext4"
+provisioner: openebs.io/local
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+---
+# Configuration de la classe de stockage LVM (expérimental)
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: openebs-lvm
+  annotations:
+    openebs.io/cas-type: local
+    cas.openebs.io/config: |
+      - name: StorageType
+        value: "lvm"
+      - name: VGName
+        value: "openebs-lvm"
+      - name: FSType
+        value: "ext4"
+provisioner: local.csi.openebs.io
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+---
+# Configuration du volume persistant pour les données OpenEBS
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: openebs-pv-claim
+  namespace: openebs
+spec:
+  storageClassName: openebs-hostpath
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+---
+# Configuration du déploiement de test OpenEBS
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openebs-test
+  namespace: openebs
+  labels:
+    app: openebs-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openebs-test
+  template:
+    metadata:
+      labels:
+        app: openebs-test
+    spec:
+      containers:
+      - name: busybox
+        image: busybox
+        command: ["/bin/sh"]
+        args: ["-c", "while true; do echo $(date) >> /mnt/store/log.txt; sleep 5; done"]
+        volumeMounts:
+        - name: openebs-pv
+          mountPath: /mnt/store
+      volumes:
+      - name: openebs-pv
+        persistentVolumeClaim:
+          claimName: openebs-pv-claim
+---
+# Configuration du service de test OpenEBS
+apiVersion: v1
+kind: Service
+metadata:
+  name: openebs-test
+  namespace: openebs
+  labels:
+    app: openebs-test
+spec:
+  ports:
+  - port: 80
+    targetPort: 80
+  selector:
+    app: openebs-test
+  type: ClusterIP

@@ -1,0 +1,183 @@
+---
+# Installation de Vitess avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: vitess
+  namespace: vitess
+spec:
+  repo: https://vitess.io/helm-charts
+  chart: vitess
+  version: "15.0.3"
+  targetNamespace: vitess
+  createNamespace: true
+  valuesContent: |-
+    # Configuration de base
+    image:
+      tag: v15.0.3
+      pullPolicy: IfNotPresent
+    
+    # Configuration des ressources
+    resources:
+      vttablet:
+        limits:
+          cpu: 2
+          memory: 4Gi
+        requests:
+          cpu: 500m
+          memory: 1Gi
+      vtgate:
+        limits:
+          cpu: 1
+          memory: 2Gi
+        requests:
+          cpu: 200m
+          memory: 512Mi
+      vtorc:
+        limits:
+          cpu: 1
+          memory: 1Gi
+        requests:
+          cpu: 100m
+          memory: 256Mi
+    
+    # Configuration du nombre de répliques
+    vttablet:
+      replicas: 3
+    vtgate:
+      replicas: 3
+    vtorc:
+      replicas: 2
+    
+    # Configuration de la persistance
+    persistence:
+      enabled: true
+      storageClass: "ssd"
+      size: 50Gi
+    
+    # Configuration de l'authentification
+    secrets:
+      create: true
+      dbCredentialsSecret: "vitess-secrets"
+      dbCredentialsSecretKey: "db-credentials"
+    
+    # Configuration des paramètres Vitess
+    vitess:
+      cell: "banadoctor"
+      keyspaces:
+        - name: "banadoctor"
+          shards: 2
+          sharding:
+            enabled: true
+            column: "id"
+            type: "HASH"
+    
+    # Configuration de la surveillance
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        additionalLabels:
+          release: kube-prometheus-stack
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: app.kubernetes.io/name
+                    operator: In
+                    values:
+                      - vitess
+              topologyKey: "kubernetes.io/hostname"
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Configuration de la politique réseau pour Vitess
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-vitess-traffic
+  namespace: vitess
+spec:
+  description: "Allow traffic to Vitess"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: vitess
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: banadoctor-backend
+    toPorts:
+    - ports:
+      - port: "15000"
+        protocol: TCP
+      - port: "15999"
+        protocol: TCP
+      - port: "3306"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: vitess
+    toPorts:
+    - ports:
+      - port: "15000"
+        protocol: TCP
+      - port: "15999"
+        protocol: TCP
+      - port: "3306"
+        protocol: TCP
+      - port: "15001"
+        protocol: TCP
+      - port: "15002"
+        protocol: TCP
+  egress: []
+---
+# Configuration des secrets pour Vitess
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vitess-secrets
+  namespace: vitess
+type: Opaque
+data:
+  db-credentials: |
+    {
+      "vt": {
+        "host": "vt-zone1-0000000100.vttablet",
+        "port": 15999,
+        "keyspace": "banadoctor",
+        "shard": "0"
+      },
+      "mysql": {
+        "host": "vt-zone1-0000000100.vttablet",
+        "port": 3306,
+        "user": "vt_dba",
+        "password": "${BASE64_VITESS_DB_PASSWORD}",
+        "dbname": "banadoctor"
+      },
+      "vtgate": {
+        "host": "vtgate",
+        "port": 15999
+      },
+      "vtorc": {
+        "host": "vtorc",
+        "port": 15000
+      }
+    }

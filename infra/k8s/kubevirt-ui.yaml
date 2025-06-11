@@ -1,0 +1,257 @@
+---
+# Installation de KubeVirt UI avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: kubevirt-ui
+  namespace: kubevirt
+  labels:
+    app.kubernetes.io/name: kubevirt-ui
+    app.kubernetes.io/instance: kubevirt-ui
+    app.kubernetes.io/component: web-ui
+    app.kubernetes.io/part-of: banadoctor
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.0.0"
+spec:
+  repo: https://kubevirt.io/kubevirt-ui
+  chart: kubevirt-ui
+  version: "1.0.0"
+  targetNamespace: kubevirt
+  createNamespace: true
+  valuesContent: |-
+    # Configuration de base
+    image:
+      repository: kubevirt/web-ui
+      tag: latest
+      pullPolicy: IfNotPresent
+    
+    # Configuration du service
+    service:
+      type: ClusterIP
+      port: 9000
+      targetPort: 3000
+      nodePort: null
+      annotations: {}
+    
+    # Configuration de l'ingress
+    ingress:
+      enabled: true
+      className: nginx
+      annotations:
+        nginx.ingress.kubernetes.io/ssl-redirect: "true"
+        nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+        nginx.ingress.kubernetes.io/proxy-body-size: "0"
+        nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+        nginx.ingress.kubernetes.io/proxy-read-timeout: "1800"
+        nginx.ingress.kubernetes.io/proxy-send-timeout: "1800"
+        nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+        nginx.ingress.kubernetes.io/configuration-snippet: |
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection "upgrade";
+          proxy_http_version 1.1;
+      hosts:
+        - host: kubevirt.banadoctor.com
+          paths:
+            - path: /
+              pathType: Prefix
+      tls:
+        - secretName: kubevirt-ui-tls
+          hosts:
+            - kubevirt.banadoctor.com
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+    
+    # Configuration des variables d'environnement
+    env:
+      NODE_ENV: production
+      API_SERVER_URL: ""
+      WS_BASE: "/api/kubernetes/apis/subresources.kubevirt.io/v1/namespaces"
+      POLL_INTERVAL: 15000
+      KUBEVIRT_VERSION: "v1.0.0"
+      CONTAINER: ""
+      CONTAINER_PREFIX: ""
+      CONTAINER_SUFFIX: ""
+      IMAGE_PULL_POLICY: "IfNotPresent"
+      VIRT_LAUNCHER_IMAGE: "kubevirt/virt-launcher"
+      VIRT_LAUNCHER_TAG: "v1.0.0"
+      VIRT_HANDLER_IMAGE: "kubevirt/virt-handler"
+      VIRT_HANDLER_TAG: "v1.0.0"
+      VIRT_CONTROLLER_IMAGE: "kubevirt/virt-controller"
+      VIRT_CONTROLLER_TAG: "v1.0.0"
+      VIRT_API_IMAGE: "kubevirt/virt-api"
+      VIRT_API_TAG: "v1.0.0"
+      VIRT_EXPORTER_IMAGE: "kubevirt/virt-exportproxy"
+      VIRT_EXPORTER_TAG: "v1.0.0"
+      VIRT_OPERATOR_IMAGE: "kubevirt/virt-operator"
+      VIRT_OPERATOR_TAG: "v1.0.0"
+      CDI_OPERATOR_IMAGE: "kubevirt/cdi-operator"
+      CDI_OPERATOR_TAG: "v1.0.0"
+      CDI_IMPORTER_IMAGE: "kubevirt/cdi-importer"
+      CDI_IMPORTER_TAG: "v1.0.0"
+      CDI_CLONER_IMAGE: "kubevirt/cdi-cloner"
+      CDI_CLONER_TAG: "v1.0.0"
+      CDI_APISERVER_IMAGE: "kubevirt/cdi-apiserver"
+      CDI_APISERVER_TAG: "v1.0.0"
+      CDI_UPLOADPROXY_IMAGE: "kubevirt/cdi-uploadproxy"
+      CDI_UPLOADPROXY_TAG: "v1.0.0"
+      CDI_UPLOADSERVER_IMAGE: "kubevirt/cdi-uploadserver"
+      CDI_UPLOADSERVER_TAG: "v1.0.0"
+      CDI_IMPORTER_IMAGE: "kubevirt/cdi-importer"
+      CDI_IMPORTER_TAG: "v1.0.0"
+      CDI_CLONER_IMAGE: "kubevirt/cdi-cloner"
+      CDI_CLONER_TAG: "v1.0.0"
+    
+    # Configuration de la surveillance
+    metrics:
+      enabled: true
+      serviceMonitor:
+        enabled: true
+        additionalLabels:
+          release: kube-prometheus-stack
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    nodeSelector:
+      node-role.kubernetes.io/management: "true"
+    
+    # Configuration de la sécurité
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 1000
+      fsGroup: 1000
+    
+    # Configuration de la persistance
+    persistence:
+      enabled: true
+      storageClass: longhorn
+      accessModes:
+        - ReadWriteOnce
+      size: 1Gi
+    
+    # Configuration des secrets
+    secrets:
+      create: true
+      name: kubevirt-ui-secrets
+      annotations: {}
+      labels: {}
+    
+    # Configuration des configurations
+    configMaps:
+      create: true
+      name: kubevirt-ui-config
+      annotations: {}
+      labels: {}
+    
+    # Configuration des services
+    services:
+      create: true
+      annotations: {}
+      labels: {}
+    
+    # Configuration des déploiements
+    deployments:
+      create: true
+      annotations: {}
+      labels: {}
+    
+    # Configuration des ingresses
+    ingresses:
+      create: true
+      annotations: {}
+      labels: {}
+    
+    # Configuration des comptes de service
+    serviceAccounts:
+      create: true
+      name: kubevirt-ui
+      annotations: {}
+      labels: {}
+
+---
+# Configuration des rôles et des autorisations pour KubeVirt UI
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubevirt-ui
+  labels:
+    app.kubernetes.io/name: kubevirt-ui
+    app.kubernetes.io/instance: kubevirt-ui
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: banadoctor
+rules:
+- apiGroups: ["kubevirt.io"]
+  resources: ["virtualmachines", "virtualmachineinstances", "virtualmachineinstancereplicasets", "virtualmachineinstancemigrations"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["cdi.kubevirt.io"]
+  resources: ["datavolumes"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["subresources.kubevirt.io"]
+  resources: ["virtualmachineinstances/console", "virtualmachineinstances/vnc"]
+  verbs: ["get", "create"]
+- apiGroups: [""]
+  resources: ["pods", "services", "endpoints", "persistentvolumeclaims", "events", "configmaps", "secrets", "serviceaccounts"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "daemonsets", "replicasets", "statefulsets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["extensions"]
+  resources: ["ingresses"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+# Configuration de la politique réseau pour KubeVirt UI
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-kubevirt-ui-traffic
+  namespace: kubevirt
+spec:
+  description: "Allow traffic to KubeVirt UI"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: kubevirt-ui
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+    toPorts:
+    - ports:
+      - port: "3000"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: monitoring
+    toPorts:
+    - ports:
+      - port: "3000"
+        protocol: TCP
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        k8s:io.kubernetes.pod.namespace: kube-system
+    toPorts:
+    - ports:
+      - port: "443"
+        protocol: TCP
+      - port: "53"
+        protocol: UDP
+  - toEndpoints:
+    - matchLabels:
+        k8s:app: kubevirt-api
+    toPorts:
+    - ports:
+      - port: "443"
+        protocol: TCP

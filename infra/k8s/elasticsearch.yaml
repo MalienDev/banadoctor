@@ -1,0 +1,338 @@
+---
+# Installation d'Elasticsearch avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: elasticsearch
+  namespace: elasticsearch
+spec:
+  repo: https://helm.elastic.co
+  chart: elasticsearch
+  version: "7.17.3"
+  targetNamespace: elasticsearch
+  createNamespace: true
+  valuesContent: |-
+    # Configuration de base
+    image: "docker.elastic.co/elasticsearch/elasticsearch"
+    imageTag: "7.17.3"
+    imagePullPolicy: "IfNotPresent"
+    
+    # Configuration des rôles
+    roles:
+      master: true
+      data: true
+      ingest: true
+      remote_cluster_client: true
+    
+    # Configuration du nombre de nœuds
+    replicas: 3
+    
+    # Configuration des ressources
+    resources:
+      requests:
+        cpu: "1000m"
+        memory: "2Gi"
+      limits:
+        cpu: "2000m"
+        memory: "4Gi"
+    
+    # Configuration de la persistance
+    volumeClaimTemplate:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 50Gi
+      storageClassName: "ssd"
+    
+    # Configuration de la sécurité
+    secret:
+      enabled: true
+      password: "${ELASTICSEARCH_PASSWORD}"
+      createCertificates: true
+    
+    # Configuration du service
+    service:
+      type: ClusterIP
+      ports:
+        - name: http
+          port: 9200
+          protocol: TCP
+          targetPort: 9200
+        - name: transport
+          port: 9300
+          protocol: TCP
+          targetPort: 9300
+    
+    # Configuration des paramètres JVM
+    esJavaOpts: "-Xms2g -Xmx2g"
+    
+    # Configuration du fichier de configuration Elasticsearch
+    esConfig:
+      elasticsearch.yml: |
+        cluster.name: "${CLUSTER_NAME}"
+        node.name: ${HOSTNAME}
+        network.host: 0.0.0.0
+        discovery.seed_hosts: []
+        cluster.initial_master_nodes: []
+        xpack.security.enabled: true
+        xpack.security.transport.ssl.enabled: true
+        xpack.security.transport.ssl.verification_mode: certificate
+        xpack.security.transport.ssl.keystore.path: /usr/share/elasticsearch/config/certs/elastic-certificates.p12
+        xpack.security.transport.ssl.truststore.path: /usr/share/elasticsearch/config/certs/elastic-certificates.p12
+        xpack.security.http.ssl.enabled: true
+        xpack.security.http.ssl.truststore.path: /usr/share/elasticsearch/config/certs/elastic-certificates.p12
+        xpack.security.http.ssl.keystore.path: /usr/share/elasticsearch/config/certs/elastic-certificates.p12
+    
+    # Configuration des secrets
+    secretMounts:
+      - name: elastic-certificates
+        secretName: elastic-certificates
+        path: /usr/share/elasticsearch/config/certs
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - elasticsearch
+            topologyKey: "kubernetes.io/hostname"
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Installation de Kibana avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: kibana
+  namespace: elasticsearch
+spec:
+  repo: https://helm.elastic.co
+  chart: kibana
+  version: "7.17.3"
+  targetNamespace: elasticsearch
+  valuesContent: |-
+    # Configuration de base
+    image: "docker.elastic.co/kibana/kibana"
+    imageTag: "7.17.3"
+    imagePullPolicy: "IfNotPresent"
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: "1000m"
+        memory: "2Gi"
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+    
+    # Configuration du service
+    service:
+      type: ClusterIP
+      port: 5601
+    
+    # Configuration de l'ingress
+    ingress:
+      enabled: true
+      className: "nginx"
+      hosts:
+        - host: "kibana.banadoctor.com"
+          paths:
+            - path: "/"
+              pathType: Prefix
+      tls:
+        - secretName: "kibana-tls"
+          hosts:
+            - "kibana.banadoctor.com"
+    
+    # Configuration d'Elasticsearch
+    elasticsearchHosts: ["http://elasticsearch-master:9200"]
+    
+    # Configuration des variables d'environnement
+    env:
+      ELASTICSEARCH_USERNAME: "elastic"
+      ELASTICSEARCH_PASSWORD: "${ELASTICSEARCH_PASSWORD}"
+      SERVER_HOST: "0.0.0.0"
+      SERVER_NAME: "kibana"
+      SERVER_BASEPATH: "/"
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+---
+# Installation de Filebeat avec Helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: filebeat
+  namespace: elasticsearch
+spec:
+  repo: https://helm.elastic.co
+  chart: filebeat
+  version: "7.17.3"
+  targetNamespace: elasticsearch
+  valuesContent: |-
+    # Configuration de base
+    image: "docker.elastic.co/beats/filebeat"
+    imageTag: "7.17.3"
+    imagePullPolicy: "IfNotPresent"
+    
+    # Configuration des ressources
+    resources:
+      limits:
+        cpu: "500m"
+        memory: "1Gi"
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+    
+    # Configuration de Filebeat
+    filebeatConfig:
+      filebeat.yml: |
+        filebeat.inputs:
+        - type: container
+          paths:
+            - /var/log/containers/*.log
+          processors:
+            - add_kubernetes_metadata:
+                host: ${NODE_NAME}
+                matchers:
+                - logs_path: "/var/log/containers/"
+                default_indexers.enabled: true
+                default_matchers.enabled: true
+                indexers:
+                  - pod_uid:
+                      matcher: pod_id
+                matchers:
+                  - fields:
+                      lookup_fields: ["kubernetes.pod.name"]
+        
+        output.elasticsearch:
+          hosts: ['${ELASTICSEARCH_HOST:elasticsearch-master:9200}']
+          username: '${ELASTICSEARCH_USERNAME:}'
+          password: '${ELASTICSEARCH_PASSWORD:}'
+          protocol: "https"
+          ssl.certificate_authorities: ["/usr/share/filebeat/certs/ca.crt"]
+          ssl.certificate: "/usr/share/filebeat/certs/elastic-certificates.p12"
+          ssl.key: "/usr/share/filebeat/certs/elastic-certificates.p12"
+          ssl.verification_mode: "certificate"
+    
+    # Configuration des volumes
+    extraVolumeMounts: ""
+    extraVolumes: ""
+    
+    # Configuration des tolérances
+    tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+    
+    # Configuration des affinités
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - amd64
+                    - arm64
+---
+# Configuration des secrets pour Elasticsearch
+apiVersion: v1
+kind: Secret
+metadata:
+  name: elastic-credentials
+  namespace: elasticsearch
+type: Opaque
+data:
+  username: ${BASE64_ELASTICSEARCH_USERNAME}
+  password: ${BASE64_ELASTICSEARCH_PASSWORD}
+---
+# Configuration de la politique réseau pour Elasticsearch
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-elasticsearch-traffic
+  namespace: elasticsearch
+spec:
+  description: "Allow traffic to Elasticsearch"
+  endpointSelector:
+    matchLabels:
+      app: elasticsearch-master
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app.kubernetes.io/name: banadoctor-backend
+    toPorts:
+    - ports:
+      - port: "9200"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        app: filebeat
+    toPorts:
+    - ports:
+      - port: "9200"
+        protocol: TCP
+  egress: []
+---
+# Configuration de la politique réseau pour Kibana
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-kibana-traffic
+  namespace: elasticsearch
+spec:
+  description: "Allow traffic to Kibana"
+  endpointSelector:
+    matchLabels:
+      app: kibana-kibana
+  ingress:
+  - fromEndpoints:
+    - {}
+    toPorts:
+    - ports:
+      - port: "5601"
+        protocol: TCP
+  egress: []
+---
+# Configuration de la politique réseau pour Filebeat
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-filebeat-traffic
+  namespace: elasticsearch
+spec:
+  description: "Allow traffic from Filebeat"
+  endpointSelector:
+    matchLabels:
+      app: filebeat
+  ingress: []
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: elasticsearch-master
+    toPorts:
+    - ports:
+      - port: "9200"
+        protocol: TCP
