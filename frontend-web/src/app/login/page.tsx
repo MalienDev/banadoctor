@@ -4,8 +4,6 @@ import Link from 'next/link';
 import { Formik, Form, Field } from 'formik';
 import * as Yup from 'yup';
 import { useAuth } from '@/contexts/AuthContext';
-import { useRouter } from 'next/navigation';
-import { useEffect } from 'react';
 
 const LoginSchema = Yup.object().shape({
   email: Yup.string().email('Email invalide').required('Champ requis'),
@@ -13,14 +11,7 @@ const LoginSchema = Yup.object().shape({
 });
 
 export default function LoginPage() {
-  const { login, isAuthenticated, loading } = useAuth();
-  const router = useRouter();
-
-  useEffect(() => {
-    if (isAuthenticated) {
-      router.push('/dashboard');
-    }
-  }, [isAuthenticated, router]);
+  const { login, loading } = useAuth();
 
   if (loading) {
     return (

@@ -69,12 +69,24 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     if (loading) return; // Wait until loading is finished
 
     const isAuthenticated = !!user;
-    const isPublic = publicPaths.includes(pathname);
+    const proPaths = ['/pro/login', '/pro/register'];
+    const allPublicPaths = [...publicPaths, ...proPaths];
+    const isPublic = allPublicPaths.some(p => pathname.startsWith(p));
 
     if (isAuthenticated && isPublic) {
-      router.push('/dashboard');
+      if (user.user_type === 'doctor') {
+        router.push('/pro/dashboard');
+      } else {
+        router.push('/dashboard');
+      }
     } else if (!isAuthenticated && !isPublic) {
-      router.push('/login');
+      if (pathname.startsWith('/pro/')) {
+        router.push('/pro/login');
+      } else if (pathname.startsWith('/admin/')) {
+        router.push('/admin/login');
+      } else {
+        router.push('/login');
+      }
     }
   }, [user, loading, pathname, router, publicPaths]);
 
@@ -102,6 +114,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       
       // Update user state
       setUser(data.user);
+
+      // Redirect based on user type
+      if (data.user.user_type === 'doctor') {
+        router.push('/pro/dashboard');
+      } else if (data.user.user_type === 'admin') {
+        router.push('/admin/dashboard');
+      } else {
+        router.push('/dashboard');
+      }
       
       return data.user;
     } catch (error) {
@@ -116,7 +137,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [router]);
 
   const register = useCallback(async (userData: Omit<User, 'id' | 'is_staff' | 'is_active' | 'date_joined' | 'last_login'> & { password: string, password2: string }) => {
     try {
@@ -137,6 +158,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       // Update user state
       setUser(data.user);
       
+      // Redirect based on user type
+      if (data.user.user_type === 'doctor') {
+        router.push('/pro/dashboard');
+      } else if (data.user.user_type === 'admin') {
+        router.push('/admin/dashboard');
+      } else {
+        router.push('/dashboard');
+      }
+      
       return data.user;
     } catch (error) {
       console.error('Registration failed:', error);
@@ -150,7 +180,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [router]);
 
   const logout = useCallback(() => {
     // Clear tokens from storage
@@ -180,13 +210,19 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             return Promise.reject(error);
           }
           try {
-            const { data } = await api.post('/api/v1/auth/token/refresh/', { refresh: refreshToken });
-            localStorage.setItem('accessToken', data.access);
-            api.defaults.headers.common['Authorization'] = `Bearer ${data.access}`;
-            originalRequest.headers.Authorization = `Bearer ${data.access}`;
+            const { data: refreshData } = await api.post<RefreshResponse>('/api/v1/auth/token/refresh/', { refresh: refreshToken });
+            const newAccessToken = refreshData.access;
+
+            localStorage.setItem('accessToken', newAccessToken);
+            api.defaults.headers.common['Authorization'] = `Bearer ${newAccessToken}`;
+            originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
+
+            const { data: userData } = await api.get<User>('/api/v1/auth/profile/');
+            setUser(userData);
+
             return api(originalRequest);
           } catch (refreshError) {
-            console.error('Token refresh failed:', refreshError);
+            console.error('Token refresh or profile fetch failed:', refreshError);
             logout();
             return Promise.reject(refreshError);
           }

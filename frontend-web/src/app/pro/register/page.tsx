@@ -19,7 +19,7 @@ const RegisterSchema = Yup.object().shape({
   terms: Yup.boolean().oneOf([true], "Vous devez accepter les conditions d'utilisation"),
 });
 
-export default function RegisterPage() {
+export default function ProRegisterPage() {
   const { register, loading } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
 
@@ -36,7 +36,7 @@ export default function RegisterPage() {
       <div className="max-w-md w-full space-y-8">
         <div>
           <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-            Créer un compte patient
+            Créer un compte professionnel
           </h2>
         </div>
 
@@ -58,7 +58,7 @@ export default function RegisterPage() {
                 email: values.email.trim().toLowerCase(),
                 password: values.password,
                 password2: values.confirmPassword,
-                user_type: 'patient', // Hardcoded for patients
+                user_type: 'doctor', // Hardcoded for professionals
               });
               // Redirection is handled by AuthContext
             } catch (error) {
@@ -113,7 +113,6 @@ export default function RegisterPage() {
                     )}
                   </div>
                 </div>
-
                 <div>
                   <label htmlFor="email" className="sr-only">
                     Adresse email
@@ -131,7 +130,6 @@ export default function RegisterPage() {
                     <p className="mt-1 text-xs text-red-600">{errors.email}</p>
                   )}
                 </div>
-
                 <div>
                   <label htmlFor="password" className="sr-only">
                     Mot de passe
@@ -151,14 +149,13 @@ export default function RegisterPage() {
                       onClick={() => setShowPassword(!showPassword)}
                       className="absolute inset-y-0 right-0 px-3 flex items-center text-sm leading-5"
                     >
-                      {showPassword ? 'Cacher' : 'Afficher'}
+                      {showPassword ? 'Hide' : 'Show'}
                     </button>
                   </div>
                   {errors.password && touched.password && (
                     <p className="mt-1 text-xs text-red-600">{errors.password}</p>
                   )}
                 </div>
-
                 <div>
                   <label htmlFor="confirmPassword" className="sr-only">
                     Confirmer le mot de passe
@@ -221,8 +218,8 @@ export default function RegisterPage() {
 
         <div className="text-center">
           <p className="text-sm text-gray-600">
-            Déjà inscrit ?{' '}
-            <Link href="/login" className="font-medium text-primary-600 hover:text-primary-500">
+            Déjà un compte professionnel ?{' '}
+            <Link href="/pro/login" className="font-medium text-primary-600 hover:text-primary-500">
               Se connecter
             </Link>
           </p>

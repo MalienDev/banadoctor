@@ -30,12 +30,6 @@ export default function ProLayout({
             </ul>
           </nav>
           <main className="pro-content">
-            <header className="pro-header">
-              <div className="user-info">
-                <span>Dr. Nom Prénom</span>
-                <button>Déconnexion</button>
-              </div>
-            </header>
             {children}
           </main>
         </div>

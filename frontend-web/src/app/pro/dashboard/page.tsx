@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Calendar, Clock, MessageSquare, User, Video, Bell, Search } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
 
 type Appointment = {
   id: number;
@@ -21,64 +22,76 @@ type StatCard = {
   change?: string;
 };
 
+type RecentActivity = {
+  id: number;
+  type: 'consultation' | 'téléconsultation' | 'message';
+  patient: string;
+  time: string;
+  status: 'terminée' | 'annulée' | 'non lu' | string;
+};
+
 export default function ProDashboard() {
   const router = useRouter();
-  const [isLoading, setIsLoading] = useState(true);
+  const { user, loading: authLoading } = useAuth();
   
-  // Données factices pour la démonstration
-  const [stats, setStats] = useState<StatCard[]>([
-    { 
-      title: 'Rendez-vous du jour', 
-      value: '12', 
-      icon: <Calendar className="w-6 h-6" />,
-      trend: 'up',
-      change: '12%'
-    },
-    { 
-      title: 'En attente', 
-      value: '3', 
-      icon: <Clock className="w-6 h-6" />,
-      trend: 'down',
-      change: '5%'
-    },
-    { 
-      title: 'Messages non lus', 
-      value: '5', 
-      icon: <MessageSquare className="w-6 h-6" />,
-      trend: 'up',
-      change: '2%'
-    },
-    { 
-      title: 'Nouveaux patients', 
-      value: '2', 
-      icon: <User className="w-6 h-6" />,
-      trend: 'up',
-      change: '8%'
-    },
-  ]);
+  const [stats, setStats] = useState<StatCard[]>([]);
+  const [upcomingAppointments, setUpcomingAppointments] = useState<Appointment[]>([]);
+  const [recentActivity, setRecentActivity] = useState<RecentActivity[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const [upcomingAppointments, setUpcomingAppointments] = useState<Appointment[]>([
-    { id: 1, patient: 'Jean Dupont', time: '09:30', type: 'Consultation', status: 'confirmé' },
-    { id: 2, patient: 'Marie Martin', time: '10:15', type: 'Téléconsultation', status: 'confirmé' },
-    { id: 3, patient: 'Pierre Durand', time: '11:00', type: 'Suivi', status: 'en attente' },
-  ]);
-
-  // Simuler le chargement des données
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setIsLoading(false);
-    }, 1000);
-    
-    return () => clearTimeout(timer);
-  }, []);
+    if (!authLoading) {
+      if (!user || user.user_type !== 'doctor') {
+        router.push('/dashboard');
+      }
+    }
+  }, [user, authLoading, router]);
 
-  // Fonction pour démarrer une téléconsultation
+  useEffect(() => {
+    if (user && user.user_type === 'doctor') {
+      const fetchDashboardData = async () => {
+        setIsLoading(true);
+        try {
+          const mockStats: StatCard[] = [
+            { title: 'Rendez-vous du jour', value: '12', icon: <Calendar className="w-6 h-6" />, trend: 'up', change: '12%' },
+            { title: 'En attente', value: '3', icon: <Clock className="w-6 h-6" />, trend: 'down', change: '5%' },
+            { title: 'Messages non lus', value: '5', icon: <MessageSquare className="w-6 h-6" />, trend: 'up', change: '2%' },
+            { title: 'Nouveaux patients', value: '2', icon: <User className="w-6 h-6" />, trend: 'up', change: '8%' },
+          ];
+          
+          const mockAppointments: Appointment[] = [
+            { id: 1, patient: 'Jean Dupont', time: '09:30', type: 'Consultation', status: 'confirmé' },
+            { id: 2, patient: 'Marie Martin', time: '10:15', type: 'Téléconsultation', status: 'confirmé' },
+            { id: 3, patient: 'Pierre Durand', time: '11:00', type: 'Suivi', status: 'en attente' },
+          ];
+
+          const mockActivity: RecentActivity[] = [
+            { id: 1, type: 'consultation', patient: 'Jean Dupont', time: 'il y a 2h', status: 'terminée' },
+            { id: 2, type: 'téléconsultation', patient: 'Marie Martin', time: 'hier', status: 'annulée' },
+            { id: 3, type: 'consultation', patient: 'Pierre Durand', time: 'hier', status: 'terminée' },
+            { id: 4, type: 'message', patient: 'Sophie Bernard', time: 'il y a 2 jours', status: 'non lu' },
+          ];
+
+          setStats(mockStats);
+          setUpcomingAppointments(mockAppointments);
+          setRecentActivity(mockActivity);
+
+        } catch (error) {
+          console.error('Failed to fetch dashboard data:', error);
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      fetchDashboardData();
+    }
+  }, [user]);
+
   const startTeleconsultation = (appointmentId: number) => {
-    // Ici, vous intégrerez la logique pour démarrer une téléconsultation
     alert(`Démarrage de la téléconsultation pour le rendez-vous #${appointmentId}`);
   };
 
-  if (isLoading) {
+  if (authLoading || isLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
@@ -86,10 +99,14 @@ export default function ProDashboard() {
     );
   }
 
+  if (!user) {
+    return null;
+  }
+
   return (
     <div className="main-container">
       <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold">Tableau de bord</h1>
+        <h1 className="text-2xl font-bold">Tableau de bord de Dr. {user.last_name}</h1>
         <div className="flex items-center space-x-4">
           <div className="relative">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -109,7 +126,6 @@ export default function ProDashboard() {
         </div>
       </div>
       
-      {/* Cartes de statistiques */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         {stats.map((stat, index) => (
           <div key={index} className="bg-white rounded-lg shadow p-6">
@@ -124,66 +140,76 @@ export default function ProDashboard() {
                 {stat.icon}
               </div>
             </div>
-            {stat.trend && (
-              <div className={`mt-2 text-sm ${
+            {stat.change && (
+              <p className={`text-sm mt-2 ${
                 stat.trend === 'up' ? 'text-green-600' : 'text-red-600'
               }`}>
-                <span>{stat.trend === 'up' ? '↑' : '↓'} {stat.change} par rapport à hier</span>
-              </div>
+                {stat.trend === 'up' ? '↑' : '↓'} {stat.change} par rapport à hier
+              </p>
             )}
           </div>
         ))}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Prochains rendez-vous */}
         <div className="lg:col-span-2">
           <div className="bg-white rounded-lg shadow overflow-hidden">
-            <div className="p-6 border-b flex justify-between items-center">
+            <div className="p-6 border-b">
               <h2 className="text-lg font-semibold">Prochains rendez-vous</h2>
-              <Link href="/pro/agenda" className="text-sm text-blue-600 hover:text-blue-500">
-                Voir tout l'agenda →
-              </Link>
             </div>
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Heure</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Patient</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
-                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Patient
+                    </th>
+                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Heure
+                    </th>
+                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Type
+                    </th>
+                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Statut
+                    </th>
+                    <th scope="col" className="relative px-6 py-3">
+                      <span className="sr-only">Actions</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {upcomingAppointments.map((appointment) => (
-                    <tr key={appointment.id} className="hover:bg-gray-50">
+                    <tr key={appointment.id}>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm font-medium text-gray-900">{appointment.time}</div>
+                        <div className="text-sm font-medium text-gray-900">{appointment.patient}</div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-900">{appointment.patient}</div>
+                        <div className="text-sm text-gray-900">{appointment.time}</div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm text-gray-500">{appointment.type}</div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                          appointment.type === 'Téléconsultation' 
-                            ? 'bg-purple-100 text-purple-800' 
-                            : 'bg-blue-100 text-blue-800'
+                          appointment.status === 'confirmé' ? 'bg-green-100 text-green-800' :
+                          appointment.status === 'en attente' ? 'bg-yellow-100 text-yellow-800' :
+                          'bg-red-100 text-red-800'
                         }`}>
-                          {appointment.type}
+                          {appointment.status}
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                         {appointment.type === 'Téléconsultation' ? (
-                          <button 
+                          <button
                             onClick={() => startTeleconsultation(appointment.id)}
                             className="text-indigo-600 hover:text-indigo-900 flex items-center"
                           >
                             <Video className="w-4 h-4 mr-1" /> Démarrer
                           </button>
                         ) : (
-                          <Link 
-                            href={`/pro/rendez-vous/${appointment.id}`} 
+                          <Link
+                            href={`/pro/rendez-vous/${appointment.id}`}
                             className="text-blue-600 hover:text-blue-900"
                           >
                             Voir détails
@@ -198,19 +224,13 @@ export default function ProDashboard() {
           </div>
         </div>
 
-        {/* Activité récente */}
         <div>
           <div className="bg-white rounded-lg shadow overflow-hidden">
             <div className="p-6 border-b">
               <h2 className="text-lg font-semibold">Activité récente</h2>
             </div>
             <div className="divide-y divide-gray-200">
-              {[
-                { id: 1, type: 'consultation', patient: 'Jean Dupont', time: 'il y a 2h', status: 'terminée' },
-                { id: 2, type: 'téléconsultation', patient: 'Marie Martin', time: 'hier', status: 'annulée' },
-                { id: 3, type: 'consultation', patient: 'Pierre Durand', time: 'hier', status: 'terminée' },
-                { id: 4, type: 'message', patient: 'Sophie Bernard', time: 'il y a 2 jours', status: 'non lu' },
-              ].map((activity) => (
+              {recentActivity.map((activity) => (
                 <div key={activity.id} className="p-4 hover:bg-gray-50">
                   <div className="flex items-start">
                     <div className={`flex-shrink-0 h-10 w-10 rounded-full flex items-center justify-center ${
