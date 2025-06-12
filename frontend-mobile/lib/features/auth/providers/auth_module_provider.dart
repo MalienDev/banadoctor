@@ -5,7 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:logger/logger.dart';
 
 import '../../core/network/dio_client.dart';
-import '../data/datasources/auth_local_data_source.dart';
+
 import '../data/datasources/auth_remote_data_source.dart';
 import '../data/repositories_impl/auth_repository_impl.dart';
 import '../domain/repositories/auth_repository.dart';
@@ -16,6 +16,7 @@ import '../domain/usecases/register_usecase.dart';
 import '../domain/usecases/reset_password_usecase.dart';
 import '../domain/usecases/verify_email_usecase.dart';
 import '../domain/usecases/verify_phone_usecase.dart';
+import '../domain/usecases/check_auth_status_usecase.dart';
 
 // Core dependencies
 final loggerProvider = Provider<Logger>((ref) => Logger());
@@ -26,25 +27,17 @@ final authRemoteDataSourceProvider = Provider<AuthRemoteDataSource>((ref) {
   return AuthRemoteDataSourceImpl(dioClient: dioClient);
 });
 
-final authLocalDataSourceProvider = Provider<AuthLocalDataSource>((ref) {
-  // These should be injected via Provider
-  final sharedPreferences = ref.watch(sharedPreferencesProvider);
-  final secureStorage = ref.watch(secureStorageProvider);
-  return AuthLocalDataSourceImpl(
-    sharedPreferences: sharedPreferences,
-    secureStorage: secureStorage,
-  );
-});
-
 // Repository
 final authRepositoryProvider = Provider<AuthRepository>((ref) {
   final remoteDataSource = ref.watch(authRemoteDataSourceProvider);
-  final localDataSource = ref.watch(authLocalDataSourceProvider);
+  final sharedPreferences = ref.watch(sharedPreferencesProvider);
+  final secureStorage = ref.watch(secureStorageProvider);
   final logger = ref.watch(loggerProvider);
-  
+
   return AuthRepositoryImpl(
     remoteDataSource: remoteDataSource,
-    localDataSource: localDataSource,
+    sharedPreferences: sharedPreferences,
+    secureStorage: secureStorage,
     logger: logger,
   );
 });
@@ -83,6 +76,11 @@ final verifyPhoneUseCaseProvider = Provider<VerifyPhoneUseCase>((ref) {
 final logoutUseCaseProvider = Provider<LogoutUseCase>((ref) {
   final repository = ref.watch(authRepositoryProvider);
   return LogoutUseCase(repository);
+});
+
+final checkAuthStatusUseCaseProvider = Provider<CheckAuthStatusUseCase>((ref) {
+  final repository = ref.watch(authRepositoryProvider);
+  return CheckAuthStatusUseCase(repository);
 });
 
 // External dependencies

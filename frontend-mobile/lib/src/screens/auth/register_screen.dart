@@ -1,17 +1,18 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import 'package:medecin_mobile/src/services/auth_service.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:medecin_mobile/features/auth/domain/usecases/register_usecase.dart';
+import 'package:medecin_mobile/features/auth/providers/auth_module_provider.dart';
 import 'package:medecin_mobile/src/widgets/custom_text_field.dart';
 import 'package:medecin_mobile/src/widgets/primary_button.dart';
 
-class RegisterScreen extends StatefulWidget {
+class RegisterScreen extends ConsumerStatefulWidget {
   const RegisterScreen({Key? key}) : super(key: key);
 
   @override
-  State<RegisterScreen> createState() => _RegisterScreenState();
+  ConsumerState<RegisterScreen> createState() => _RegisterScreenState();
 }
 
-class _RegisterScreenState extends State<RegisterScreen> {
+class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   final _formKey = GlobalKey<FormState>();
   final _firstNameController = TextEditingController();
   final _lastNameController = TextEditingController();
@@ -19,8 +20,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _phoneController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
-  final _specializationController = TextEditingController();
-  
+
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
   bool _isDoctor = false;
@@ -34,7 +34,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _phoneController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
-    _specializationController.dispose();
     super.dispose();
   }
 
@@ -43,30 +42,41 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     setState(() => _isLoading = true);
 
-    final success = await context.read<AuthService>().register(
-          email: _emailController.text.trim(),
-          password: _passwordController.text,
-          firstName: _firstNameController.text.trim(),
-          lastName: _lastNameController.text.trim(),
-          userType: _isDoctor ? 'doctor' : 'patient',
-          phoneNumber: _phoneController.text.trim(),
-          specialization: _isDoctor ? _specializationController.text.trim() : null,
-        );
-
-    setState(() => _isLoading = false);
+    final registerUseCase = ref.read(registerUseCaseProvider);
+    final result = await registerUseCase(
+      RegisterParams(
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
+        firstName: _firstNameController.text.trim(),
+        lastName: _lastNameController.text.trim(),
+        role: _isDoctor ? 'doctor' : 'patient',
+        phoneNumber: _phoneController.text.trim(),
+      ),
+    );
 
     if (!mounted) return;
 
-    if (!success) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            context.read<AuthService>().error ?? 'Échec de l\'inscription',
+    result.fold(
+      (failure) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(failure.message),
+            backgroundColor: Theme.of(context).colorScheme.error,
           ),
-          backgroundColor: Theme.of(context).colorScheme.error,
-        ),
-      );
-    }
+        );
+      },
+      (user) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Inscription réussie pour ${user.email}!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        Navigator.pop(context); // Go back to login screen
+      },
+    );
+
+    setState(() => _isLoading = false);
   }
 
   @override
@@ -133,14 +143,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
                 const SizedBox(height: 16),
-                // First name and last name row
+                // First name and last name
                 Row(
                   children: [
                     Expanded(
                       child: CustomTextField(
                         controller: _firstNameController,
                         label: 'Prénom',
-                        textCapitalization: TextCapitalization.words,
+                        prefixIcon: Icons.person_outline,
                         validator: (value) {
                           if (value == null || value.isEmpty) {
                             return 'Champ requis';
@@ -154,7 +164,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       child: CustomTextField(
                         controller: _lastNameController,
                         label: 'Nom',
-                        textCapitalization: TextCapitalization.words,
+                        prefixIcon: Icons.person_outline,
                         validator: (value) {
                           if (value == null || value.isEmpty) {
                             return 'Champ requis';
@@ -169,52 +179,27 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 // Email
                 CustomTextField(
                   controller: _emailController,
-                  label: 'Adresse email',
-                  keyboardType: TextInputType.emailAddress,
+                  label: 'Email',
                   prefixIcon: Icons.email_outlined,
+                  keyboardType: TextInputType.emailAddress,
                   validator: (value) {
                     if (value == null || value.isEmpty) {
                       return 'Champ requis';
                     }
-                    if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}').hasMatch(value)) {
+                    if (!RegExp(r'^[^@]+@[^@]+\.[^@]+').hasMatch(value)) {
                       return 'Email invalide';
                     }
                     return null;
                   },
                 ),
                 const SizedBox(height: 16),
-                // Phone
+                // Phone number
                 CustomTextField(
                   controller: _phoneController,
-                  label: 'Téléphone',
-                  keyboardType: TextInputType.phone,
+                  label: 'Téléphone (Facultatif)',
                   prefixIcon: Icons.phone_outlined,
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Champ requis';
-                    }
-                    // Simple phone number validation (can be improved)
-                    if (value.length < 8) {
-                      return 'Numéro invalide';
-                    }
-                    return null;
-                  },
+                  keyboardType: TextInputType.phone,
                 ),
-                if (_isDoctor) ...[
-                  const SizedBox(height: 16),
-                  CustomTextField(
-                    controller: _specializationController,
-                    label: 'Spécialisation',
-                    textCapitalization: TextCapitalization.words,
-                    prefixIcon: Icons.medical_services_outlined,
-                    validator: (value) {
-                      if (_isDoctor && (value == null || value.isEmpty)) {
-                        return 'Champ requis';
-                      }
-                      return null;
-                    },
-                  ),
-                ],
                 const SizedBox(height: 24),
                 // Password
                 Text(

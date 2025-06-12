@@ -2,8 +2,25 @@
 
 import { useAuth } from '@/contexts/AuthContext';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { get } from '@/lib/api';
+
+// Define the Appointment type based on the serializer
+type Appointment = {
+  id: number;
+  scheduled_date: string;
+  start_time: string;
+  end_time: string;
+  status: string;
+  status_display: string;
+  appointment_type: string;
+  type_display: string;
+  patient_name: string;
+  doctor_name: string;
+  is_paid: boolean;
+  amount: number | null;
+};
 
 type Stats = {
   upcomingAppointments: number;
@@ -14,56 +31,64 @@ type Stats = {
 };
 
 export default function DashboardPage() {
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAuthenticated, loading: authLoading } = useAuth();
   const [stats, setStats] = useState<Stats | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [dataLoading, setDataLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
 
   useEffect(() => {
-    if (!isAuthenticated) return;
+    // Only run on client side
+    if (typeof window === 'undefined') return;
 
-    const fetchStats = async () => {
-      try {
-        setLoading(true);
-        const endpoint = user?.role === 'doctor' 
-          ? '/api/doctor/dashboard-stats/' 
-          : '/api/patient/dashboard-stats/';
-        
-        const data = await get<Stats>(endpoint);
-        setStats(data);
-      } catch (err) {
-        console.error('Failed to fetch dashboard stats:', err);
-        setError('Impossible de charger les statistiques du tableau de bord');
-      } finally {
-        setLoading(false);
-      }
-    };
+    // If auth is still loading, do nothing
+    if (authLoading) return;
 
-    fetchStats();
-  }, [isAuthenticated, user?.role]);
+    // If user is not authenticated, redirect to login
+    if (!isAuthenticated) {
+      router.push('/login');
+      return;
+    }
 
-  if (!isAuthenticated) {
+    // Only fetch data if we have a user
+    if (user) {
+      const fetchData = async () => {
+        try {
+          setDataLoading(true);
+          const endpoint = '/api/v1/auth/dashboard-stats/';
+          
+          const [statsData, appointmentsData] = await Promise.all([
+            get<Stats>(endpoint),
+            get<Appointment[]>('/api/v1/appointments/?ordering=scheduled_date,start_time&limit=5')
+          ]);
+          
+          setStats(statsData);
+          setAppointments(appointmentsData);
+        } catch (err) {
+          console.error('Failed to fetch dashboard stats:', err);
+          setError('Impossible de charger les statistiques du tableau de bord');
+        } finally {
+          setDataLoading(false);
+        }
+      };
+
+      fetchData();
+    }
+  }, [isAuthenticated, authLoading, user, router]);
+
+  // Show loading state while checking auth or loading data
+  if (authLoading || (isAuthenticated && dataLoading)) {
     return (
       <div className="flex justify-center items-center min-h-screen">
-        <div className="text-center">
-          <h1 className="text-2xl font-bold mb-4">Veuillez vous connecter pour accéder au tableau de bord</h1>
-          <Link 
-            href="/login" 
-            className="bg-primary-600 hover:bg-primary-700 text-white font-bold py-2 px-4 rounded"
-          >
-            Se connecter
-          </Link>
-        </div>
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary-500"></div>
       </div>
     );
   }
 
-  if (loading) {
-    return (
-      <div className="flex justify-center items-center min-h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary-500"></div>
-      </div>
-    );
+  // If not authenticated (should be redirected, but just in case)
+  if (!isAuthenticated) {
+    return null; // Will be redirected by the useEffect
   }
 
   if (error) {
@@ -87,7 +112,7 @@ export default function DashboardPage() {
     <div>
       <h1 className="text-3xl font-bold text-gray-900 mb-8">Tableau de bord</h1>
       
-      {user?.role === 'patient' ? (
+      {user?.user_type === 'patient' ? (
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
           <div className="bg-white overflow-hidden shadow rounded-lg">
             <div className="px-4 py-5 sm:p-6">
@@ -278,10 +303,10 @@ export default function DashboardPage() {
       <div className="mt-8">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-semibold text-gray-900">
-            {user?.role === 'patient' ? 'Mes prochains rendez-vous' : 'Prochains rendez-vous'}
+            {user?.user_type === 'patient' ? 'Mes prochains rendez-vous' : 'Prochains rendez-vous'}
           </h2>
           <Link 
-            href={user?.role === 'patient' ? '/appointments' : '/doctor/appointments'}
+            href={user?.user_type === 'patient' ? '/appointments' : '/doctor/appointments'}
             className="text-sm font-medium text-primary-600 hover:text-primary-500"
           >
             Voir tout
@@ -289,45 +314,43 @@ export default function DashboardPage() {
         </div>
         
         <div className="bg-white shadow overflow-hidden sm:rounded-md">
-          <ul className="divide-y divide-gray-200">
-            {/* Sample appointment - in a real app, you would map over actual appointments */}
-            <li>
-              <div className="px-4 py-4 sm:px-6">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-medium text-primary-600 truncate">
-                    {user?.role === 'patient' 
-                      ? 'Consultation avec Dr. Dupont' 
-                      : 'Consultation avec Jean Martin'}
-                  </p>
-                  <div className="ml-2 flex-shrink-0 flex">
-                    <p className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
-                      Confirmé
-                    </p>
-                  </div>
-                </div>
-                <div className="mt-2 sm:flex sm:justify-between">
-                  <div className="sm:flex">
-                    <p className="flex items-center text-sm text-gray-500">
-                      <svg className="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                        <path fillRule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clipRule="evenodd" />
-                      </svg>
-                      Demain, 14:00 - 14:30
-                    </p>
-                  </div>
-                  <div className="mt-2 flex items-center text-sm text-gray-500 sm:mt-0">
-                    <svg className="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
-                    </svg>
-                    <p>
-                      {user?.role === 'patient' 
-                        ? 'Cabinet médical, 123 Rue de la Paix, Paris'
-                        : 'Consultation en ligne'}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </li>
-            {/* Add more appointments as needed */}
+                    <ul className="divide-y divide-gray-200">
+            {appointments.length > 0 ? (
+              appointments.map((appointment) => (
+                <li key={appointment.id}>
+                  <Link href={`/appointments/${appointment.id}`} className="block hover:bg-gray-50">
+                    <div className="px-4 py-4 sm:px-6">
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-medium text-primary-600 truncate">
+                          {user?.user_type === 'patient'
+                            ? `Dr. ${appointment.doctor_name}`
+                            : appointment.patient_name}
+                        </p>
+                        <div className="ml-2 flex-shrink-0 flex">
+                          <p className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${appointment.status === 'confirmed' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                            {appointment.status_display}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-2 sm:flex sm:justify-between">
+                        <div className="sm:flex">
+                          <p className="flex items-center text-sm text-gray-500">
+                            <svg className="flex-shrink-0 mr-1.5 h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                              <path fillRule="evenodd" d="M6 2a1 1 0 00-1 1v1H4a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1V3a1 1 0 10-2 0v1H7V3a1 1 0 00-1-1zm0 5a1 1 0 000 2h8a1 1 0 100-2H6z" clipRule="evenodd" />
+                            </svg>
+                            {new Date(appointment.scheduled_date).toLocaleDateString('fr-FR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} à {appointment.start_time.slice(0, 5)}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </Link>
+                </li>
+              ))
+            ) : (
+              <li className="px-4 py-4 sm:px-6">
+                <p className="text-sm text-gray-500">Aucun rendez-vous à venir.</p>
+              </li>
+            )}
           </ul>
         </div>
       </div>

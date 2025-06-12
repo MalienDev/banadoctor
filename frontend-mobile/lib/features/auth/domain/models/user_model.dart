@@ -6,17 +6,16 @@ part 'user_model.g.dart';
 @freezed
 class User with _$User {
   const factory User({
-    required String id,
+    required int id,
     required String email,
-    required String firstName,
-    required String lastName,
-    String? phoneNumber,
-    String? profileImageUrl,
-    @Default('patient') String role,
-    @Default(false) bool emailVerified,
-    @Default(false) bool phoneVerified,
-    DateTime? createdAt,
-    DateTime? updatedAt,
+    @JsonKey(name: 'first_name') required String firstName,
+    @JsonKey(name: 'last_name') required String lastName,
+    @JsonKey(name: 'phone_number') String? phoneNumber,
+    @JsonKey(name: 'profile_picture') String? profileImageUrl,
+    @JsonKey(name: 'user_type') @Default(UserRole.patient) UserRole userType,
+    @JsonKey(name: 'is_verified') @Default(false) bool isVerified,
+    @JsonKey(name: 'created_at') DateTime? createdAt,
+    @JsonKey(name: 'updated_at') DateTime? updatedAt,
   }) = _User;
 
   factory User.fromJson(Map<String, dynamic> json) => _$UserFromJson(json);

@@ -17,7 +17,7 @@ const RegisterSchema = Yup.object().shape({
   confirmPassword: Yup.string()
     .oneOf([Yup.ref('password')], 'Les mots de passe ne correspondent pas')
     .required('Veuillez confirmer votre mot de passe'),
-  role: Yup.string().oneOf(['patient', 'doctor'], 'Rôle invalide').required('Champ requis'),
+  user_type: Yup.string().oneOf(['patient', 'doctor'], 'Rôle invalide').required('Champ requis'),
   terms: Yup.boolean().oneOf([true], 'Vous devez accepter les conditions d\'utilisation'),
 });
 
@@ -27,7 +27,7 @@ type FormValues = {
   email: string;
   password: string;
   confirmPassword: string;
-  role: 'patient' | 'doctor';
+  user_type: 'patient' | 'doctor';
   terms: boolean;
 };
 
@@ -56,7 +56,7 @@ export default function RegisterPage() {
     email: '',
     password: '',
     confirmPassword: '',
-    role: 'patient',
+    user_type: 'patient',
     terms: false,
   };
 
@@ -74,12 +74,13 @@ export default function RegisterPage() {
           validationSchema={RegisterSchema}
           onSubmit={async (values, { setSubmitting, setStatus }) => {
             try {
-              const { confirmPassword, terms, ...registrationData } = values;
               await register({
-                ...registrationData,
-                firstName: values.firstName.trim(),
-                lastName: values.lastName.trim(),
+                first_name: values.firstName.trim(),
+                last_name: values.lastName.trim(),
                 email: values.email.trim().toLowerCase(),
+                password: values.password,
+                password2: values.confirmPassword, // Add password confirmation
+                user_type: values.user_type,
               });
             } catch (error) {
               setStatus("Une erreur s'est produite lors de l'inscription. Veuillez réessayer.");
@@ -206,30 +207,30 @@ export default function RegisterPage() {
                   </label>
                   <div className="grid grid-cols-2 gap-4">
                     <label className={`inline-flex items-center p-3 border rounded-md cursor-pointer ${
-                      values.role === 'patient' ? 'border-primary-500 bg-primary-50' : 'border-gray-300'
+                      values.user_type === 'patient' ? 'border-primary-500 bg-primary-50' : 'border-gray-300'
                     }`}>
                       <Field
                         type="radio"
-                        name="role"
+                        name="user_type"
                         value="patient"
                         className="h-4 w-4 text-primary-600 focus:ring-primary-500"
                       />
                       <span className="ml-2 text-sm text-gray-700">Patient</span>
                     </label>
                     <label className={`inline-flex items-center p-3 border rounded-md cursor-pointer ${
-                      values.role === 'doctor' ? 'border-primary-500 bg-primary-50' : 'border-gray-300'
+                      values.user_type === 'doctor' ? 'border-primary-500 bg-primary-50' : 'border-gray-300'
                     }`}>
                       <Field
                         type="radio"
-                        name="role"
+                        name="user_type"
                         value="doctor"
                         className="h-4 w-4 text-primary-600 focus:ring-primary-500"
                       />
                       <span className="ml-2 text-sm text-gray-700">Médecin</span>
                     </label>
                   </div>
-                  {errors.role && touched.role && (
-                    <p className="mt-1 text-xs text-red-600">{errors.role}</p>
+                  {errors.user_type && touched.user_type && (
+                    <p className="mt-1 text-xs text-red-600">{errors.user_type}</p>
                   )}
                 </div>
               </div>

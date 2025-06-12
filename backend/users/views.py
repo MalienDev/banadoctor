@@ -9,6 +9,8 @@ from rest_framework import generics, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 from .models import DoctorAvailability
@@ -20,6 +22,15 @@ from .serializers import (
     UserProfileSerializer,
     UserSerializer,
 )
+
+
+class DoctorListView(generics.ListAPIView):
+    """View to list all doctors"""
+    serializer_class = UserProfileSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        return User.objects.filter(user_type='doctor')
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -34,15 +45,26 @@ class RegisterView(generics.CreateAPIView):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
-        
-        # In a real app, you would send a verification email here
-        # send_verification_email(user)
-        
-        return Response(
-            {"message": "User registered successfully. Please check your email for verification."},
-            status=status.HTTP_201_CREATED
-        )
+        user = serializer.save()
+
+        # Generate tokens for the new user
+        refresh = RefreshToken.for_user(user)
+
+        # Replicate the data structure from the login response
+        user_data = {
+            'id': user.id,
+            'email': user.email,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'user_type': user.user_type,
+            'is_verified': user.is_verified,
+        }
+
+        return Response({
+            'refresh': str(refresh),
+            'access': str(refresh.access_token),
+            'user': user_data
+        }, status=status.HTTP_201_CREATED)
 
 
 
@@ -187,6 +209,35 @@ class DoctorAvailabilityView(generics.ListCreateAPIView):
         if not self.request.user.is_doctor:
             raise PermissionDenied("Only doctors can set availability")
         serializer.save(doctor=self.request.user)
+
+
+class DashboardStatsView(APIView):
+    """
+    Provides dashboard statistics for the logged-in user.
+    Differentiates between 'patient' and 'doctor' users.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        user = request.user
+        if user.user_type == 'doctor':
+            # Dummy data for doctors
+            data = {
+                'total_appointments': 150,
+                'upcoming_appointments': 12,
+                'total_patients': 75,
+            }
+        elif user.user_type == 'patient':
+            # Dummy data for patients
+            data = {
+                'upcoming_appointments': 3,
+                'past_appointments': 10,
+                'prescriptions_ready': 1,
+            }
+        else:
+            return Response({'error': 'User role not recognized'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        return Response(data, status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])

@@ -7,25 +7,50 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../../../core/error/exceptions.dart';
 import '../../../../core/error/failures.dart';
-import '../../../../core/network/dio_client.dart';
+import '../datasources/auth_remote_data_source.dart';
 import '../../domain/models/user_model.dart';
+import '../../domain/entities/user_entity.dart';
 import '../../domain/repositories/auth_repository.dart';
 
 class AuthRepositoryImpl implements AuthRepository {
-  final DioClient _dioClient;
+  final AuthRemoteDataSource _remoteDataSource;
   final SharedPreferences _sharedPreferences;
   final FlutterSecureStorage _secureStorage;
   final Logger _logger;
 
   AuthRepositoryImpl({
-    required DioClient dioClient,
+    required AuthRemoteDataSource remoteDataSource,
     required SharedPreferences sharedPreferences,
     required FlutterSecureStorage secureStorage,
     required Logger logger,
-  })  : _dioClient = dioClient,
+  })  : _remoteDataSource = remoteDataSource,
         _sharedPreferences = sharedPreferences,
         _secureStorage = secureStorage,
         _logger = logger;
+
+  @override
+  Future<Either<Failure, User>> checkAuthStatus() async {
+    try {
+      final accessToken = await _secureStorage.read(key: 'access_token');
+      if (accessToken == null) {
+        _logger.i('No access token found in storage.');
+        return left(CacheFailure('No access token found'));
+      }
+
+      final userModel = await _remoteDataSource.getUserProfile();
+      await _saveUser(userModel);
+      _logger.i('Auth status check successful for user: ${userModel.email}');
+      return right(userModel);
+    } on ServerException catch (e) {
+      _logger.w('Auth status check failed, logging out. Reason: ${e.message}');
+      await logout();
+      return left(ServerFailure(e.message));
+    } catch (e, stackTrace) {
+      _logger.e('Unexpected auth status check error', error: e, stackTrace: stackTrace);
+      await logout();
+      return left(ServerFailure('An unexpected error occurred during auth check.'));
+    }
+  }
 
   @override
   Future<Either<Failure, User>> login({
@@ -33,26 +58,19 @@ class AuthRepositoryImpl implements AuthRepository {
     required String password,
   }) async {
     try {
-      final response = await _dioClient.dio.post(
-        '/auth/login',
-        data: {
-          'email': email,
-          'password': password,
-        },
-      );
+      final response = await _remoteDataSource.login(email: email, password: password);
+      
+      final user = User.fromJson(response['user']);
+      final accessToken = response['access'] as String;
+      final refreshToken = response['refresh'] as String;
 
-      final user = User.fromJson(response.data['data']['user']);
-      final token = response.data['data']['token'] as String;
-      final refreshToken = response.data['data']['refreshToken'] as String;
-
-      // Save tokens
-      await _saveTokens(token, refreshToken);
+      await _saveTokens(accessToken, refreshToken);
       await _saveUser(user);
 
       return right(user);
-    } on DioException catch (e) {
-      _logger.e('Login error: ${e.message}');
-      return left(ServerFailure.fromDioException(e));
+    } on ServerException catch (e) {
+      _logger.e('Login ServerException: ${e.message}');
+      return left(ServerFailure(e.message));
     } catch (e, stackTrace) {
       _logger.e('Unexpected login error', error: e, stackTrace: stackTrace);
       return left(ServerFailure(e.toString()));
@@ -69,30 +87,26 @@ class AuthRepositoryImpl implements AuthRepository {
     required String role,
   }) async {
     try {
-      final response = await _dioClient.dio.post(
-        '/auth/register',
-        data: {
-          'email': email,
-          'password': password,
-          'firstName': firstName,
-          'lastName': lastName,
-          if (phoneNumber != null) 'phoneNumber': phoneNumber,
-          'role': role,
-        },
+      final response = await _remoteDataSource.register(
+        email: email,
+        password: password,
+        firstName: firstName,
+        lastName: lastName,
+        phoneNumber: phoneNumber,
+        role: role,
       );
 
-      final user = User.fromJson(response.data['data']['user']);
-      final token = response.data['data']['token'] as String;
-      final refreshToken = response.data['data']['refreshToken'] as String;
+      final user = User.fromJson(response['user']);
+      final accessToken = response['access'] as String;
+      final refreshToken = response['refresh'] as String;
 
-      // Save tokens
-      await _saveTokens(token, refreshToken);
+      await _saveTokens(accessToken, refreshToken);
       await _saveUser(user);
 
       return right(user);
-    } on DioException catch (e) {
-      _logger.e('Registration error: ${e.message}');
-      return left(ServerFailure.fromDioException(e));
+    } on ServerException catch (e) {
+      _logger.e('Registration ServerException: ${e.message}');
+      return left(ServerFailure(e.message));
     } catch (e, stackTrace) {
       _logger.e('Unexpected registration error', error: e, stackTrace: stackTrace);
       return left(ServerFailure(e.toString()));
@@ -132,14 +146,11 @@ class AuthRepositoryImpl implements AuthRepository {
   @override
   Future<Either<Failure, void>> forgotPassword(String email) async {
     try {
-      await _dioClient.dio.post(
-        '/auth/forgot-password',
-        data: {'email': email},
-      );
+      await _remoteDataSource.forgotPassword(email);
       return right(null);
-    } on DioException catch (e) {
+    } on ServerException catch (e) {
       _logger.e('Forgot password error: ${e.message}');
-      return left(ServerFailure.fromDioException(e));
+      return left(ServerFailure(e.message));
     } catch (e, stackTrace) {
       _logger.e('Unexpected forgot password error', error: e, stackTrace: stackTrace);
       return left(ServerFailure(e.toString()));
@@ -152,17 +163,11 @@ class AuthRepositoryImpl implements AuthRepository {
     required String newPassword,
   }) async {
     try {
-      await _dioClient.dio.post(
-        '/auth/reset-password',
-        data: {
-          'token': token,
-          'newPassword': newPassword,
-        },
-      );
+      await _remoteDataSource.resetPassword(token: token, newPassword: newPassword);
       return right(null);
-    } on DioException catch (e) {
+    } on ServerException catch (e) {
       _logger.e('Reset password error: ${e.message}');
-      return left(ServerFailure.fromDioException(e));
+      return left(ServerFailure(e.message));
     } catch (e, stackTrace) {
       _logger.e('Unexpected reset password error', error: e, stackTrace: stackTrace);
       return left(ServerFailure(e.toString()));
@@ -178,25 +183,19 @@ class AuthRepositoryImpl implements AuthRepository {
     String? profileImageUrl,
   }) async {
     try {
-      final data = <String, dynamic>{};
-      if (firstName != null) data['firstName'] = firstName;
-      if (lastName != null) data['lastName'] = lastName;
-      if (phoneNumber != null) data['phoneNumber'] = phoneNumber;
-      if (profileImageUrl != null) data['profileImageUrl'] = profileImageUrl;
-
-      final response = await _dioClient.dio.patch(
-        '/users/$userId',
-        data: data,
+      final response = await _remoteDataSource.updateProfile(
+        userId: userId,
+        firstName: firstName,
+        lastName: lastName,
+        phoneNumber: phoneNumber,
+        profileImageUrl: profileImageUrl,
       );
-
-      // Update local user data
-      final user = User.fromJson(response.data['data']);
+      final user = User.fromJson(response);
       await _saveUser(user);
-
       return right(null);
-    } on DioException catch (e) {
+    } on ServerException catch (e) {
       _logger.e('Update profile error: ${e.message}');
-      return left(ServerFailure.fromDioException(e));
+      return left(ServerFailure(e.message));
     } catch (e, stackTrace) {
       _logger.e('Unexpected update profile error', error: e, stackTrace: stackTrace);
       return left(ServerFailure(e.toString()));
@@ -209,17 +208,11 @@ class AuthRepositoryImpl implements AuthRepository {
     required String newPassword,
   }) async {
     try {
-      await _dioClient.dio.post(
-        '/auth/change-password',
-        data: {
-          'currentPassword': currentPassword,
-          'newPassword': newPassword,
-        },
-      );
+      await _remoteDataSource.changePassword(currentPassword: currentPassword, newPassword: newPassword);
       return right(null);
-    } on DioException catch (e) {
+    } on ServerException catch (e) {
       _logger.e('Change password error: ${e.message}');
-      return left(ServerFailure.fromDioException(e));
+      return left(ServerFailure(e.message));
     } catch (e, stackTrace) {
       _logger.e('Unexpected change password error', error: e, stackTrace: stackTrace);
       return left(ServerFailure(e.toString()));
@@ -229,14 +222,11 @@ class AuthRepositoryImpl implements AuthRepository {
   @override
   Future<Either<Failure, void>> verifyEmail(String token) async {
     try {
-      await _dioClient.dio.post(
-        '/auth/verify-email',
-        data: {'token': token},
-      );
+      await _remoteDataSource.verifyEmail(token);
       return right(null);
-    } on DioException catch (e) {
+    } on ServerException catch (e) {
       _logger.e('Verify email error: ${e.message}');
-      return left(ServerFailure.fromDioException(e));
+      return left(ServerFailure(e.message));
     } catch (e, stackTrace) {
       _logger.e('Unexpected verify email error', error: e, stackTrace: stackTrace);
       return left(ServerFailure(e.toString()));
@@ -246,14 +236,11 @@ class AuthRepositoryImpl implements AuthRepository {
   @override
   Future<Either<Failure, void>> verifyPhone(String code) async {
     try {
-      await _dioClient.dio.post(
-        '/auth/verify-phone',
-        data: {'code': code},
-      );
+      await _remoteDataSource.verifyPhone(code);
       return right(null);
-    } on DioException catch (e) {
+    } on ServerException catch (e) {
       _logger.e('Verify phone error: ${e.message}');
-      return left(ServerFailure.fromDioException(e));
+      return left(ServerFailure(e.message));
     } catch (e, stackTrace) {
       _logger.e('Unexpected verify phone error', error: e, stackTrace: stackTrace);
       return left(ServerFailure(e.toString()));
@@ -261,12 +248,9 @@ class AuthRepositoryImpl implements AuthRepository {
   }
 
   // Helper methods
-  Future<void> _saveTokens(String token, String refreshToken) async {
-    await _secureStorage.write(key: 'auth_token', value: token);
+  Future<void> _saveTokens(String accessToken, String refreshToken) async {
+    await _secureStorage.write(key: 'access_token', value: accessToken);
     await _secureStorage.write(key: 'refresh_token', value: refreshToken);
-    
-    // Update Dio headers
-    _dioClient.dio.options.headers['Authorization'] = 'Bearer $token';
   }
 
   Future<void> _saveUser(User user) async {

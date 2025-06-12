@@ -27,6 +27,7 @@ from rest_framework_simplejwt.views import (
     TokenRefreshView,
     TokenVerifyView,
 )
+from users.views import DoctorListView
 
 # Define a simple view for the API root
 def api_v1_root_view(request):
@@ -40,6 +41,9 @@ api_patterns = [
     
     # Appointments
     path('appointments/', include('appointments.urls')),
+
+    # Doctors
+    path('doctors/', DoctorListView.as_view(), name='doctor-list'),
     
     # JWT Token endpoints
     path('token/verify/', TokenVerifyView.as_view(), name='token_verify'),

@@ -1,5 +1,4 @@
-import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios';
-import { getCookie } from 'cookies-next';
+import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse, AxiosError } from 'axios';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -9,16 +8,16 @@ const api: AxiosInstance = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  withCredentials: true,
 });
 
-// Add a request interceptor to add the auth token to requests
+// Add a request interceptor to include the auth token
 api.interceptors.request.use(
   (config) => {
-    // Only add the token if we're making a request to our API
     if (typeof window !== 'undefined') {
-      const token = getCookie('token');
-      if (token && config.url?.startsWith('/api')) {
-        config.headers.Authorization = `Token ${token}`;
+      const token = localStorage.getItem('accessToken');
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
       }
     }
     return config;
@@ -28,59 +27,70 @@ api.interceptors.request.use(
   }
 );
 
-// Add a response interceptor to handle errors
+// Add a response interceptor to handle 401 errors and token refresh
 api.interceptors.response.use(
-  (response: AxiosResponse) => {
-    return response;
-  },
-  (error) => {
-    // Handle 401 Unauthorized errors
-    if (error.response?.status === 401) {
-      // Clear the token and redirect to login
-      if (typeof window !== 'undefined') {
-        document.cookie = 'token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;';
-        window.location.href = '/login';
+  (response: AxiosResponse) => response,
+  async (error: AxiosError) => {
+    const originalRequest = error.config as any;
+    
+    if (error.response?.status === 401 && !originalRequest?._retry) {
+      originalRequest._retry = true;
+      
+      try {
+        const refreshToken = localStorage.getItem('refreshToken');
+        if (!refreshToken) {
+          if (typeof window !== 'undefined') {
+            localStorage.removeItem('accessToken');
+            localStorage.removeItem('refreshToken');
+            window.location.href = '/login';
+          }
+          return Promise.reject(error);
+        }
+        
+        const response = await axios.post(`${API_URL}/api/v1/auth/token/refresh/`, { refresh: refreshToken });
+        
+        const { access } = response.data;
+        
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('accessToken', access);
+        }
+        
+        api.defaults.headers.common['Authorization'] = `Bearer ${access}`;
+        originalRequest.headers['Authorization'] = `Bearer ${access}`;
+        
+        return api(originalRequest);
+      } catch (refreshError) {
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem('accessToken');
+          localStorage.removeItem('refreshToken');
+          window.location.href = '/login';
+        }
+        return Promise.reject(refreshError);
       }
     }
+    
     return Promise.reject(error);
   }
 );
 
-// Helper function to make authenticated GET requests
-export const get = async <T>(
-  url: string,
-  config?: AxiosRequestConfig
-): Promise<T> => {
-  const response = await api.get<T>(url, config);
+// Helper functions to make authenticated requests
+export const get = async <T>(url: string, config?: AxiosRequestConfig): Promise<T> => {
+  const response = await api.get<T>(`/api${url}`, config);
   return response.data;
 };
 
-// Helper function to make authenticated POST requests
-export const post = async <T>(
-  url: string,
-  data?: any,
-  config?: AxiosRequestConfig
-): Promise<T> => {
-  const response = await api.post<T>(url, data, config);
+export const post = async <T>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> => {
+  const response = await api.post<T>(`/api${url}`, data, config);
   return response.data;
 };
 
-// Helper function to make authenticated PUT requests
-export const put = async <T>(
-  url: string,
-  data?: any,
-  config?: AxiosRequestConfig
-): Promise<T> => {
-  const response = await api.put<T>(url, data, config);
+export const put = async <T>(url: string, data?: any, config?: AxiosRequestConfig): Promise<T> => {
+  const response = await api.put<T>(`/api${url}`, data, config);
   return response.data;
 };
 
-// Helper function to make authenticated DELETE requests
-export const del = async <T>(
-  url: string,
-  config?: AxiosRequestConfig
-): Promise<T> => {
-  const response = await api.delete<T>(url, config);
+export const del = async <T>(url: string, config?: AxiosRequestConfig): Promise<T> => {
+  const response = await api.delete<T>(`/api${url}`, config);
   return response.data;
 };
 

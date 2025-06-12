@@ -26,4 +26,7 @@ urlpatterns = [
     # Doctor specific
     path('doctor/availability/', views.DoctorAvailabilityView.as_view(), 
          name='doctor-availability'),
+
+    # Dashboard stats
+    path('dashboard-stats/', views.DashboardStatsView.as_view(), name='dashboard-stats'),
 ]

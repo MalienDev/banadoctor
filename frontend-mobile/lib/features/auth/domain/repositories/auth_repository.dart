@@ -4,6 +4,8 @@ import '../../../../core/error/failures.dart';
 import '../models/user_model.dart';
 
 abstract class AuthRepository {
+  Future<Either<Failure, User>> checkAuthStatus();
+
   Future<Either<Failure, User>> login({
     required String email,
     required String password,
