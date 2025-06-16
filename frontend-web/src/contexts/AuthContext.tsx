@@ -39,6 +39,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const publicPaths = ['/login', '/register'];
 
   const loadUser = useCallback(async () => {
+    // Only run on client-side
+    if (typeof window === 'undefined') {
+      setLoading(false);
+      return;
+    }
+
     const accessToken = localStorage.getItem('accessToken');
     if (accessToken) {
       try {
@@ -47,13 +53,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           throw new Error('Token expired');
         }
         api.defaults.headers.common['Authorization'] = `Bearer ${accessToken}`;
-        const { data: userData } = await api.get<User>('/api/v1/auth/profile/');
+        const { data: userData } = await api.get<User>('/users/profile/');
         setUser(userData);
       } catch (error) {
         console.error('Failed to load user:', error);
         setUser(null);
-        localStorage.removeItem('accessToken');
-        localStorage.removeItem('refreshToken');
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem('accessToken');
+          localStorage.removeItem('refreshToken');
+        }
         delete api.defaults.headers.common['Authorization'];
       }
     }
@@ -103,7 +111,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const login = useCallback(async (email: string, password: string) => {
     try {
       setLoading(true);
-      const { data } = await api.post<LoginResponse>('/api/v1/auth/login/', { email, password });
+      const { data } = await api.post<LoginResponse>('/auth/login/', { email, password });
       
       // Store tokens
       localStorage.setItem('accessToken', data.access);
@@ -142,11 +150,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const register = useCallback(async (userData: Omit<User, 'id' | 'is_staff' | 'is_active' | 'date_joined' | 'last_login'> & { password: string, password2: string }) => {
     try {
       setLoading(true);
-      const { data } = await api.post<LoginResponse>('/api/v1/auth/register/', {
-        ...userData,
+      const payload = {
+        email: userData.email,
+        first_name: userData.first_name,
+        last_name: userData.last_name,
+        password: userData.password,
         password2: userData.password2,
-        user_type: userData.user_type ? userData.user_type : 'patient'
-      });
+        user_type: userData.user_type || 'patient',
+      };
+      const { data } = await api.post<LoginResponse>('/auth/register/', payload);
       
       // Store tokens
       localStorage.setItem('accessToken', data.access);
@@ -210,14 +222,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             return Promise.reject(error);
           }
           try {
-            const { data: refreshData } = await api.post<RefreshResponse>('/api/v1/auth/token/refresh/', { refresh: refreshToken });
+            const { data: refreshData } = await api.post<RefreshResponse>('/auth/token/refresh/', { refresh: refreshToken });
             const newAccessToken = refreshData.access;
 
             localStorage.setItem('accessToken', newAccessToken);
             api.defaults.headers.common['Authorization'] = `Bearer ${newAccessToken}`;
             originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
 
-            const { data: userData } = await api.get<User>('/api/v1/auth/profile/');
+            const { data: userData } = await api.get<User>('/users/profile/');
             setUser(userData);
 
             return api(originalRequest);

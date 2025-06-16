@@ -4,7 +4,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { get } from '@/lib/api';
+import api, { get } from '@/lib/api';
 
 // Define the Appointment type based on the serializer
 type Appointment = {
@@ -56,11 +56,11 @@ export default function DashboardPage() {
       const fetchData = async () => {
         try {
           setDataLoading(true);
-          const endpoint = '/api/v1/auth/dashboard-stats/';
+          const endpoint = '/auth/dashboard-stats/';
           
           const [statsData, appointmentsData] = await Promise.all([
-            get<Stats>(endpoint),
-            get<Appointment[]>('/api/v1/appointments/?ordering=scheduled_date,start_time&limit=5')
+            api.get<Stats>(endpoint).then(res => res.data),
+            api.get<Appointment[]>('/appointments/?ordering=scheduled_date,start_time&limit=5').then(res => res.data)
           ]);
           
           setStats(statsData);

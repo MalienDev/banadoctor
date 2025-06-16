@@ -1,5 +1,6 @@
 import { Metadata } from 'next';
 import { Inter } from 'next/font/google';
+import Link from 'next/link';
 import './pro-layout.css';
 
 const inter = Inter({ subsets: ['latin'] });
@@ -21,12 +22,12 @@ export default function ProLayout({
           <nav className="pro-sidebar">
             <div className="logo">BanaDoctor Pro</div>
             <ul>
-              <li><a href="/pro/dashboard">Tableau de bord</a></li>
-              <li><a href="/pro/agenda">Agenda</a></li>
-              <li><a href="/pro/rendez-vous">Rendez-vous</a></li>
-              <li><a href="/pro/teleconsultation">Téléconsultation</a></li>
-              <li><a href="/pro/messagerie">Messagerie</a></li>
-              <li><a href="/pro/parametres">Paramètres</a></li>
+              <li><Link href="/pro/dashboard">Tableau de bord</Link></li>
+              <li><Link href="/pro/agenda">Agenda</Link></li>
+              <li><Link href="/pro/rendez-vous">Rendez-vous</Link></li>
+              <li><Link href="/pro/teleconsultation">Téléconsultation</Link></li>
+              <li><Link href="/pro/messagerie">Messagerie</Link></li>
+              <li><Link href="/pro/parametres">Paramètres</Link></li>
             </ul>
           </nav>
           <main className="pro-content">

@@ -37,7 +37,8 @@ class AppointmentListSerializer(serializers.ModelSerializer):
         model = Appointment
         fields = [
             'id', 'scheduled_date', 'start_time', 'end_time', 'status', 'status_display',
-            'appointment_type', 'type_display', 'patient_name', 'doctor_name', 'is_paid', 'amount'
+            'appointment_type', 'type_display', 'patient_name', 'doctor_name', 'is_paid', 'amount',
+            'created_at', 'updated_at'
         ]
 
 class AppointmentCreateSerializer(serializers.ModelSerializer):

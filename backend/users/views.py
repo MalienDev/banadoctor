@@ -1,255 +1,288 @@
 import logging
-
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
-from django.core.exceptions import PermissionDenied
+from django.shortcuts import get_object_or_404
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
-from rest_framework import generics, status
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework import generics, permissions, status, viewsets
+from rest_framework.exceptions import ValidationError
+from rest_framework.parsers import JSONParser, MultiPartParser
 from rest_framework.response import Response
-from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.views import APIView
-from rest_framework_simplejwt.views import TokenObtainPairView
 
-from .models import DoctorAvailability
-from .serializers import (
-    ChangePasswordSerializer,
-    CustomTokenObtainPairSerializer,
-    ResetPasswordEmailSerializer,
-    SetNewPasswordSerializer,
-    UserProfileSerializer,
-    UserSerializer,
+from .models import (
+    DoctorAvailability, DoctorEducation, DoctorVerificationDocument, User
 )
+from .serializers import (
+    ChangePasswordSerializer, CustomTokenObtainPairSerializer, DoctorAvailabilitySerializer,
+    DoctorEducationSerializer, DoctorProfileSerializer, DoctorVerificationDocumentSerializer,
+    ResetPasswordEmailSerializer, SetNewPasswordSerializer, UserProfileSerializer, UserSerializer
+)
+from .utils import Util
 
-
-class DoctorListView(generics.ListAPIView):
-    """View to list all doctors"""
-    serializer_class = UserProfileSerializer
-    permission_classes = [AllowAny]
-
-    def get_queryset(self):
-        return User.objects.filter(user_type='doctor')
-
-User = get_user_model()
 logger = logging.getLogger(__name__)
 
+class IsOwnerOrReadOnly(permissions.BasePermission):
+    """
+    Custom permission to only allow owners of an object to edit it.
+    """
+    def has_object_permission(self, request, view, obj):
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        return obj == request.user
 
-class RegisterView(generics.CreateAPIView):
-    """View for user registration"""
+# --- User Account & Authentication Views ---
+
+class UserRegistrationView(generics.CreateAPIView):
     queryset = User.objects.all()
-    permission_classes = (AllowAny,)
+    permission_classes = [permissions.AllowAny]
     serializer_class = UserSerializer
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
+        try:
+            Util.send_verification_email(user, request)
+        except Exception as e:
+            logger.error(f"Failed to send verification email for {user.email}: {e}")
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
-        # Generate tokens for the new user
-        refresh = RefreshToken.for_user(user)
+class UserLoginView(APIView):
+    permission_classes = [permissions.AllowAny]
 
-        # Replicate the data structure from the login response
-        user_data = {
-            'id': user.id,
-            'email': user.email,
-            'first_name': user.first_name,
-            'last_name': user.last_name,
-            'user_type': user.user_type,
-            'is_verified': user.is_verified,
-        }
+    def post(self, request, *args, **kwargs):
+        serializer = CustomTokenObtainPairSerializer(data=request.data)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except Exception:
+            return Response({'error': 'Email or password incorrect.'}, status=status.HTTP_401_UNAUTHORIZED)
+        
+        user = serializer.user
+        if not user.is_verified:
+            return Response({'error': 'Please verify your email address before logging in.'}, status=status.HTTP_403_FORBIDDEN)
+        
+        if user.user_type == 'doctor' and not user.is_doctor_verified:
+            return Response({'error': 'Your doctor account is pending verification.'}, status=status.HTTP_403_FORBIDDEN)
+        
+        return Response(serializer.validated_data, status=status.HTTP_200_OK)
 
-        return Response({
-            'refresh': str(refresh),
-            'access': str(refresh.access_token),
-            'user': user_data
-        }, status=status.HTTP_201_CREATED)
+class VerifyEmailView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, uidb64, token):
+        try:
+            uid = force_str(urlsafe_base64_decode(uidb64))
+            user = User.objects.get(pk=uid)
+        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            user = None
+
+        if user is not None and default_token_generator.check_token(user, token):
+            user.is_verified = True
+            user.save()
+            return Response({'message': 'Email verified successfully!'}, status=status.HTTP_200_OK)
+        else:
+            return Response({'error': 'Invalid or expired verification link.'}, status=status.HTTP_400_BAD_REQUEST)
+
+class ResendVerificationEmailView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        email = request.data.get('email')
+        if not email:
+            return Response({'error': 'Email is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            user = User.objects.get(email=email)
+            if user.is_verified:
+                return Response({'error': 'This email is already verified.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            Util.send_verification_email(user, request)
+            return Response({'message': 'Verification email has been resent.'}, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            return Response({'error': 'No user found with this email.'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f"Error resending verification email for {email}: {e}")
+            return Response({'error': 'Failed to send verification email.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class CheckEmailView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        email = request.data.get('email')
+        if not email:
+            return Response({'error': 'Email not provided.'}, status=status.HTTP_400_BAD_REQUEST)
+        exists = User.objects.filter(email=email).exists()
+        return Response({'exists': exists})
 
 
-
-class CustomTokenObtainPairView(TokenObtainPairView):
-    """Custom token obtain view to use our serializer"""
-    serializer_class = CustomTokenObtainPairSerializer
-
-
+# --- User Profile and Password Management ---
 
 class UserProfileView(generics.RetrieveUpdateAPIView):
-    """View to retrieve and update user profile"""
-    permission_classes = (IsAuthenticated,)
+    queryset = User.objects.all()
     serializer_class = UserProfileSerializer
+    permission_classes = [permissions.IsAuthenticated]
 
     def get_object(self):
         return self.request.user
 
-
-
 class ChangePasswordView(generics.UpdateAPIView):
-    """View for changing user password"""
-    permission_classes = (IsAuthenticated,)
     serializer_class = ChangePasswordSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user
 
     def update(self, request, *args, **kwargs):
+        user = self.get_object()
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        
-        # Check old password
-        if not request.user.check_password(serializer.data.get("old_password")):
-            return Response(
-                {"old_password": ["Wrong password."]}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Set new password
-        request.user.set_password(serializer.data.get("new_password"))
-        request.user.save()
-        
-        return Response({"message": "Password updated successfully"}, status=status.HTTP_200_OK)
 
+        if not user.check_password(serializer.data.get("old_password")):
+            return Response({"old_password": ["Wrong password."]}, status=status.HTTP_400_BAD_REQUEST)
+        
+        user.set_password(serializer.data.get("new_password"))
+        user.save()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
-
-class RequestPasswordResetEmail(generics.GenericAPIView):
-    """View for requesting password reset email"""
-    permission_classes = (AllowAny,)
+class SendPasswordResetEmailView(generics.GenericAPIView):
+    permission_classes = [permissions.AllowAny]
     serializer_class = ResetPasswordEmailSerializer
 
-    def post(self, request):
-        serializer = self.serializer_class(data=request.data)
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         email = serializer.validated_data['email']
-        
-        if User.objects.filter(email=email).exists():
-            # In a real app, you would send a password reset email here
-            # send_password_reset_email(user)
-            pass
-        
-        # Always return success to prevent email enumeration
-        return Response(
-            {'message': 'If an account exists with this email, you will receive a password reset link.'},
-            status=status.HTTP_200_OK
-        )
-
-
-
-class PasswordTokenCheckAPI(generics.GenericAPIView):
-    """View to verify password reset token"""
-    permission_classes = (AllowAny,)
-    
-    def get(self, request, uidb64, token):
         try:
-            id = force_str(urlsafe_base64_decode(uidb64))
-            user = User.objects.get(id=id)
-            
-            if not default_token_generator.check_token(user, token):
-                return Response(
-                    {'error': 'Token is not valid, please request a new one'},
-                    status=status.HTTP_401_UNAUTHORIZED
-                )
-                
-            return Response({
-                'success': True,
-                'message': 'Credentials Valid',
-                'uidb64': uidb64,
-                'token': token
-            }, status=status.HTTP_200_OK)
-            
-        except Exception:
-            return Response(
-                {'error': 'Link is no longer valid'},
-                status=status.HTTP_401_UNAUTHORIZED
-            )
+            user = User.objects.get(email=email)
+            Util.send_password_reset_email(user, request)
+        except User.DoesNotExist:
+            pass # Do not reveal if user exists
+        except Exception as e:
+            logger.error(f"Failed to send password reset email for {email}: {e}")
+        
+        return Response({'message': 'If an account with this email exists, a password reset link has been sent.'}, status=status.HTTP_200_OK)
 
-
-
-class SetNewPasswordAPIView(generics.GenericAPIView):
-    """View to set a new password after password reset"""
-    permission_classes = (AllowAny,)
+class UserPasswordResetView(generics.GenericAPIView):
+    permission_classes = [permissions.AllowAny]
     serializer_class = SetNewPasswordSerializer
-    
-    def patch(self, request):
-        serializer = self.serializer_class(data=request.data)
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        
-        try:
-            id = force_str(urlsafe_base64_decode(serializer.data.get('uidb64')))
-            user = User.objects.get(id=id)
-            
-            if not default_token_generator.check_token(user, serializer.data.get('token')):
-                return Response(
-                    {'error': 'Token is not valid, please request a new one'},
-                    status=status.HTTP_401_UNAUTHORIZED
-                )
-            
-            user.set_password(serializer.data.get('password'))
-            user.save()
-            
-            return Response(
-                {'message': 'Password reset successful'},
-                status=status.HTTP_200_OK
-            )
-            
-        except Exception:
-            logger.error("An error occurred while resetting the password")
-            return Response(
-                {'error': 'Something went wrong'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        serializer.save()
+        return Response({'message': 'Password reset successful.'}, status=status.HTTP_200_OK)
 
 
+# --- Doctor Specific Views ---
 
-class DoctorAvailabilityView(generics.ListCreateAPIView):
-    """View to manage doctor's availability"""
-    permission_classes = (IsAuthenticated,)
-    serializer_class = None  # You'll need to create this serializer
-    
+class DoctorListView(generics.ListAPIView):
+    queryset = User.objects.filter(user_type='doctor', is_doctor_verified=True, is_active=True)
+    serializer_class = DoctorProfileSerializer
+    permission_classes = [permissions.AllowAny]
+
+class DoctorDetailView(generics.RetrieveUpdateAPIView):
+    queryset = User.objects.filter(user_type='doctor', is_doctor_verified=True)
+    serializer_class = DoctorProfileSerializer
+    permission_classes = [IsOwnerOrReadOnly]
+    lookup_field = 'pk'
+
+
+class DoctorAvailabilityListView(generics.ListAPIView):
+    serializer_class = DoctorAvailabilitySerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        doctor_id = self.kwargs.get('pk')
+        return DoctorAvailability.objects.filter(doctor_id=doctor_id)
+
+
+class DoctorReviewListView(generics.ListAPIView):
+    # TODO: Create and import ReviewSerializer
+    # serializer_class = ReviewSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        # TODO: Create a Review model and filter by doctor_id
+        # doctor_id = self.kwargs.get('pk')
+        # return Review.objects.filter(doctor_id=doctor_id)
+        return [] # Returning empty list as a placeholder
+
+
+class DoctorAvailabilityViewSet(viewsets.ModelViewSet):
+    serializer_class = DoctorAvailabilitySerializer
+    permission_classes = [permissions.IsAuthenticated]
+
     def get_queryset(self):
         return DoctorAvailability.objects.filter(doctor=self.request.user)
-    
+
     def perform_create(self, serializer):
-        if not self.request.user.is_doctor:
-            raise PermissionDenied("Only doctors can set availability")
+        if self.request.user.user_type != 'doctor':
+            raise ValidationError("Only doctors can set availability.")
+        serializer.save(doctor=self.request.user)
+
+class DoctorEducationViewSet(viewsets.ModelViewSet):
+    serializer_class = DoctorEducationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return DoctorEducation.objects.filter(doctor=self.request.user)
+
+    def perform_create(self, serializer):
+        if self.request.user.user_type != 'doctor':
+            raise ValidationError("Only doctors can add education.")
         serializer.save(doctor=self.request.user)
 
 
+# --- Doctor Verification Views ---
+
+class DoctorDocumentUploadView(generics.CreateAPIView):
+    serializer_class = DoctorVerificationDocumentSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, JSONParser]
+
+    def perform_create(self, serializer):
+        if self.request.user.user_type != 'doctor':
+            raise ValidationError("Only doctors can upload documents.")
+        serializer.save(doctor=self.request.user)
+
+class DoctorDocumentListView(generics.ListAPIView):
+    serializer_class = DoctorVerificationDocumentSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return DoctorVerificationDocument.objects.filter(doctor=self.request.user)
+
+class AdminVerifyDoctorView(APIView):
+    permission_classes = [permissions.IsAdminUser]
+
+    def post(self, request, doctor_id):
+        doctor = get_object_or_404(User, pk=doctor_id, user_type='doctor')
+        doctor.is_doctor_verified = True
+        doctor.is_active = True
+        doctor.save()
+        try:
+            Util.send_template_email(
+                'emails/doctor_approved.html',
+                {'user': doctor},
+                'Your Doctor Account Has Been Approved',
+                doctor.email
+            )
+        except Exception as e:
+            logger.error(f"Error sending approval email to {doctor.email}: {e}")
+        return Response({'message': 'Doctor verified successfully.'}, status=status.HTTP_200_OK)
+
+
+# --- Dashboard Views ---
+
 class DashboardStatsView(APIView):
-    """
-    Provides dashboard statistics for the logged-in user.
-    Differentiates between 'patient' and 'doctor' users.
-    """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
-        user = request.user
-        if user.user_type == 'doctor':
-            # Dummy data for doctors
-            data = {
-                'total_appointments': 150,
-                'upcoming_appointments': 12,
-                'total_patients': 75,
-            }
-        elif user.user_type == 'patient':
-            # Dummy data for patients
-            data = {
-                'upcoming_appointments': 3,
-                'past_appointments': 10,
-                'prescriptions_ready': 1,
-            }
-        else:
-            return Response({'error': 'User role not recognized'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        return Response(data, status=status.HTTP_200_OK)
-
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def check_email_availability(request):
-    """Check if an email is available for registration"""
-    email = request.query_params.get('email', None)
-    if not email:
-        return Response(
-            {'error': 'Email parameter is required'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-    
-    is_available = not User.objects.filter(email__iexact=email).exists()
-    return Response({'available': is_available}, status=status.HTTP_200_OK)
+        # This is a placeholder. Implement actual logic later.
+        stats = {
+            "appointments": 0,
+            "patients": 0,
+            "revenue": "0.00"
+        }
+        return Response(stats)
