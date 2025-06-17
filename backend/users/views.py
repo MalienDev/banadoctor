@@ -60,11 +60,21 @@ class UserLoginView(APIView):
             return Response({'error': 'Email or password incorrect.'}, status=status.HTTP_401_UNAUTHORIZED)
         
         user = serializer.user
+        # If the user's email is not verified, inform the frontend where to redirect
         if not user.is_verified:
-            return Response({'error': 'Please verify your email address before logging in.'}, status=status.HTTP_403_FORBIDDEN)
+            return Response({
+                'error': 'Your email address has not been verified.',
+                'status': 'email_not_verified',
+                'redirect_to': '/activate-account'  # Front-end route that shows resend-link instructions
+            }, status=status.HTTP_403_FORBIDDEN)
         
+        # If the logged-in user is a doctor whose account is still pending admin approval
         if user.user_type == 'doctor' and not user.is_doctor_verified:
-            return Response({'error': 'Your doctor account is pending verification.'}, status=status.HTTP_403_FORBIDDEN)
+            return Response({
+                'error': 'Your doctor account is pending verification.',
+                'status': 'doctor_not_verified',
+                'redirect_to': '/doctor/pending-verification'
+            }, status=status.HTTP_403_FORBIDDEN)
         
         return Response(serializer.validated_data, status=status.HTTP_200_OK)
 
@@ -177,7 +187,7 @@ class UserPasswordResetView(generics.GenericAPIView):
 # --- Doctor Specific Views ---
 
 class DoctorListView(generics.ListAPIView):
-    queryset = User.objects.filter(user_type='doctor', is_doctor_verified=True, is_active=True)
+    queryset = User.objects.filter(user_type='doctor', is_doctor_verified=True, is_active=True).order_by('id')
     serializer_class = DoctorProfileSerializer
     permission_classes = [permissions.AllowAny]
 
@@ -219,7 +229,34 @@ class DoctorAvailabilityViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         if self.request.user.user_type != 'doctor':
             raise ValidationError("Only doctors can set availability.")
-        serializer.save(doctor=self.request.user)
+
+        validated_data = serializer.validated_data
+        day_of_week = validated_data.get('day_of_week')
+        start_time = validated_data.get('start_time')
+        end_time = validated_data.get('end_time')
+        doctor = self.request.user
+
+        # Check for exact duplicates
+        if DoctorAvailability.objects.filter(
+            doctor=doctor,
+            day_of_week=day_of_week,
+            start_time=start_time,
+            end_time=end_time
+        ).exists():
+            raise ValidationError("This availability slot already exists.")
+
+        # Check for overlapping time slots
+        overlapping_slots = DoctorAvailability.objects.filter(
+            doctor=doctor,
+            day_of_week=day_of_week,
+            start_time__lt=end_time,
+            end_time__gt=start_time
+        )
+
+        if overlapping_slots.exists():
+            raise ValidationError("This availability overlaps with an existing slot.")
+
+        serializer.save(doctor=doctor)
 
 class DoctorEducationViewSet(viewsets.ModelViewSet):
     serializer_class = DoctorEducationSerializer

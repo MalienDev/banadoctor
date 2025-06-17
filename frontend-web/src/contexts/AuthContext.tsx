@@ -4,6 +4,7 @@ import { createContext, useContext, useState, ReactNode, useCallback, useEffect 
 import { useRouter, usePathname } from 'next/navigation';
 import api from '@/lib/api';
 import { jwtDecode } from 'jwt-decode';
+import type { AxiosError } from 'axios';
 
 type User = {
   id: number;
@@ -13,6 +14,7 @@ type User = {
   user_type: 'patient' | 'doctor' | 'admin';
   is_staff: boolean;
   is_active: boolean;
+  is_verified: boolean;
   date_joined: string;
   last_login: string | null;
 };
@@ -105,24 +107,31 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   interface LoginResponse {
     access: string;
     refresh: string;
-    user: User;
+    user: User & {
+      is_verified: boolean;
+    };
   }
 
-  const login = useCallback(async (email: string, password: string) => {
+  const login = useCallback(async (email: string, password: string): Promise<User> => {
     try {
       setLoading(true);
       const { data } = await api.post<LoginResponse>('/auth/login/', { email, password });
       
-      // Store tokens
+      // Check if email is verified
+      if (!data.user.is_verified) {
+        // Redirect to activation page with email as query param
+        router.push(`/activate-account?email=${encodeURIComponent(email)}`);
+        return data.user;
+      }
+
+      // If email is verified, proceed with normal login
       localStorage.setItem('accessToken', data.access);
       localStorage.setItem('refreshToken', data.refresh);
-      
-      // Set auth header
       api.defaults.headers.common['Authorization'] = `Bearer ${data.access}`;
       
       // Update user state
       setUser(data.user);
-
+      
       // Redirect based on user type
       if (data.user.user_type === 'doctor') {
         router.push('/pro/dashboard');
@@ -133,15 +142,25 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       }
       
       return data.user;
-    } catch (error) {
-      console.error('Login failed:', error);
+    } catch (err) {
+      console.error('Login failed:', err);
+
+      // Handle 403 (forbidden) which our backend sends when the account is not yet verified
+      const axiosResp = (err as AxiosError<{ redirect_to?: string; error?: string }>).response;
+      if (axiosResp && axiosResp.status === 403) {
+        // Prefer URL provided by backend but fall back to the built-in activation page
+        const redirectUrl = axiosResp.data?.redirect_to ?? `/activate-account?email=${encodeURIComponent(email)}`;
+        router.push(redirectUrl);
+        // propagate a readable error to calling form handlers
+        throw new Error(axiosResp.data?.error || 'Votre compte n\'est pas encore activé.');
+      }
       
       // Clear any partial state on failure
       localStorage.removeItem('accessToken');
       localStorage.removeItem('refreshToken');
       setUser(null);
       
-      throw error;
+      throw err;
     } finally {
       setLoading(false);
     }
