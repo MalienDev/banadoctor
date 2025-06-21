@@ -180,6 +180,11 @@ USE_I18N = True
 USE_TZ = True
 
 
+# Stripe Configuration
+STRIPE_SECRET_KEY = 'your_stripe_secret_key'  # Replace with your actual secret key
+STRIPE_PUBLISHABLE_KEY = 'your_stripe_publishable_key'  # Replace with your actual publishable key
+STRIPE_WEBHOOK_SECRET = 'your_stripe_webhook_secret'  # Replace with your actual webhook secret
+
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 

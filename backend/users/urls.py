@@ -13,6 +13,7 @@ from .views import (
     SendPasswordResetEmailView, UserLoginView, UserPasswordResetView,
     UserProfileView, UserRegistrationView, VerifyEmailView
 )
+from search.views import DoctorSearchView
 
 router = DefaultRouter()
 router.register(r'doctors/availability', DoctorAvailabilityViewSet, basename='doctor-availability')
@@ -45,6 +46,9 @@ v1_urlpatterns = [
              name='send-reset-password-email'),
         path('reset-password/<uidb64>/<token>/', 
              UserPasswordResetView.as_view(), name='reset-password'),
+        
+        # Dashboard
+        path('dashboard-stats/', DashboardStatsView.as_view(), name='dashboard-stats'),
     ])),
     
     # Doctor verification endpoints
@@ -64,21 +68,21 @@ v1_urlpatterns = [
     path('users/availability/', DoctorAvailabilityViewSet.as_view({'get': 'list', 'post': 'create'}), 
          name='user-availability'),
 
-    # Dashboard
-    path('users/dashboard-stats/', DashboardStatsView.as_view(), name='dashboard-stats'),
-    
+    # Search for doctors
+    path('users/search-doctors/', DoctorSearchView.as_view(), name='doctor-search'),
+
     # Doctor related endpoints
-    path('doctors/', DoctorListView.as_view(), name='doctor-list'),
-    path('doctors/<int:pk>/', DoctorDetailView.as_view(), name='doctor-detail'),
-    path('doctors/<int:pk>/availability/', DoctorAvailabilityListView.as_view(), name='doctor-availability-list'),
-    path('doctors/<int:pk>/reviews/', DoctorReviewListView.as_view(), name='doctor-reviews-list'),
-    
+    path('users/doctors/', DoctorListView.as_view(), name='doctor-list'),
+    path('users/doctors/<int:pk>/', DoctorDetailView.as_view(), name='doctor-detail'),
+    path('users/doctors/<int:pk>/availability/', DoctorAvailabilityListView.as_view(), name='doctor-availability-list'),
+    path('users/doctors/<int:pk>/reviews/', DoctorReviewListView.as_view(), name='doctor-reviews-list'),
+
     # Doctor availability bulk operations
-    path('doctors/availability/bulk/', 
-         DoctorAvailabilityViewSet.as_view({'get': 'bulk_availability'}), 
+    path('users/doctors/availability/bulk/',
+         DoctorAvailabilityViewSet.as_view({'get': 'bulk_availability'}),
          name='doctor-availability-bulk'),
-    path('availability/bulk-update/', 
-         DoctorAvailabilityViewSet.as_view({'post': 'bulk_update'}), 
+    path('users/doctors/availability/bulk-update/',
+         DoctorAvailabilityViewSet.as_view({'post': 'bulk_update'}),
          name='doctor-availability-bulk-update'),
 
     # Router URLs for ViewSets - Keep this last

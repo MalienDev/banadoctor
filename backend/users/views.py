@@ -7,17 +7,24 @@ from django.utils.http import urlsafe_base64_decode
 from rest_framework import generics, permissions, status, viewsets
 from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import JSONParser, MultiPartParser
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from appointments.models import Appointment
+from appointments.serializers import AppointmentListSerializer
+from django.utils import timezone
+from django.db.models import Sum, Count
 
 from .models import (
     DoctorAvailability, DoctorEducation, DoctorVerificationDocument, User
 )
 from .serializers import (
-    ChangePasswordSerializer, CustomTokenObtainPairSerializer, DoctorAvailabilitySerializer,
-    DoctorEducationSerializer, DoctorProfileSerializer, DoctorVerificationDocumentSerializer,
-    ResetPasswordEmailSerializer, SetNewPasswordSerializer, UserProfileSerializer, UserSerializer
+    DoctorProfileSerializer, UserProfileSerializer, 
+    DoctorAvailabilitySerializer, DoctorEducationSerializer, DoctorReviewSerializer, 
+    DoctorVerificationDocumentSerializer, CustomTokenObtainPairSerializer, ChangePasswordSerializer, ResetPasswordEmailSerializer, SetNewPasswordSerializer,
+    UserSerializer
 )
+from .permissions import IsDoctorOrAdmin
 from .utils import Util
 
 logger = logging.getLogger(__name__)
@@ -30,6 +37,13 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
         if request.method in permissions.SAFE_METHODS:
             return True
         return obj == request.user
+
+class IsDoctor(permissions.BasePermission):
+    """
+    Custom permission to only allow doctors to access certain views.
+    """
+    def has_permission(self, request, view):
+        return request.user.user_type == 'doctor'
 
 # --- User Account & Authentication Views ---
 
@@ -313,13 +327,55 @@ class AdminVerifyDoctorView(APIView):
 # --- Dashboard Views ---
 
 class DashboardStatsView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    """
+    Provides dynamic statistics for the doctor's dashboard.
+    """
+    permission_classes = [IsAuthenticated, IsDoctorOrAdmin]
 
     def get(self, request, *args, **kwargs):
-        # This is a placeholder. Implement actual logic later.
+        doctor = request.user
+        today = timezone.now().date()
+
+        # Basic stats
+        appointments_today_count = Appointment.objects.filter(doctor=doctor, scheduled_date=today).count()
+        pending_appointments_count = Appointment.objects.filter(doctor=doctor, status='pending').count()
+        
+        # Total unique patients for the doctor
+        total_patients_count = Appointment.objects.filter(doctor=doctor).values('patient').distinct().count()
+
+        # Total revenue from completed and paid appointments
+        total_revenue = Appointment.objects.filter(
+            doctor=doctor, 
+            status='completed', 
+            is_paid=True
+        ).aggregate(total=Sum('amount'))['total'] or 0.00
+
         stats = {
-            "appointments": 0,
-            "patients": 0,
-            "revenue": "0.00"
+            'appointments_today': appointments_today_count,
+            'pending_appointments': pending_appointments_count,
+            'total_patients': total_patients_count,
+            'unread_messages': 0,  # Placeholder until messaging is implemented
+            'total_revenue': total_revenue,
         }
-        return Response(stats)
+
+        # Upcoming appointments (next 5)
+        upcoming_appointments_qs = Appointment.objects.filter(
+            doctor=doctor,
+            scheduled_date__gte=today,
+            status__in=['pending', 'confirmed']
+        ).order_by('scheduled_date', 'start_time')[:5]
+        
+        # Recent activity (last 5 completed appointments)
+        recent_activity_qs = Appointment.objects.filter(
+            doctor=doctor,
+            status='completed'
+        ).order_by('-updated_at')[:5]
+
+        upcoming_appointments_serializer = AppointmentListSerializer(upcoming_appointments_qs, many=True, context={'request': request})
+        recent_activity_serializer = AppointmentListSerializer(recent_activity_qs, many=True, context={'request': request})
+
+        return Response({
+            'stats': stats,
+            'upcoming_appointments': upcoming_appointments_serializer.data,
+            'recent_activity': recent_activity_serializer.data,
+        })

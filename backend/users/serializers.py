@@ -95,18 +95,21 @@ class DoctorProfileSerializer(serializers.ModelSerializer):
     Serializer for doctor-specific profile details.
     Includes nested education records.
     """
-    specialization = serializers.CharField(source='doctor_profile.specialization.name', read_only=True)
+    specializations = serializers.StringRelatedField(
+        source='doctor_profile.specializations', many=True, read_only=True
+    )
     license_number = serializers.CharField(source='doctor_profile.license_number', read_only=True)
     years_of_experience = serializers.IntegerField(source='doctor_profile.years_of_experience', read_only=True)
     bio = serializers.CharField(source='doctor_profile.bio', read_only=True)
-    consultation_fee = serializers.DecimalField(source='doctor_profile.consultation_fee', max_digits=10, decimal_places=2, read_only=True)
+    consultation_fee = serializers.DecimalField(
+        source='doctor_profile.consultation_fee', max_digits=10, decimal_places=2, read_only=True
+    )
+    average_rating = serializers.FloatField(source='doctor_profile.average_rating', read_only=True)
+    total_reviews = serializers.IntegerField(source='doctor_profile.total_reviews', read_only=True)
     awards = serializers.CharField(source='doctor_profile.awards', read_only=True, allow_blank=True)
     memberships = serializers.CharField(source='doctor_profile.memberships', read_only=True, allow_blank=True)
     publications = serializers.CharField(source='doctor_profile.publications', read_only=True, allow_blank=True)
     research_interests = serializers.CharField(source='doctor_profile.research_interests', read_only=True, allow_blank=True)
-    average_rating = serializers.FloatField(source='doctor_profile.average_rating', read_only=True)
-    total_reviews = serializers.IntegerField(source='doctor_profile.total_reviews', read_only=True)
-
     educations = DoctorEducationSerializer(many=True, read_only=True)
     
     class Meta:
@@ -114,7 +117,7 @@ class DoctorProfileSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'first_name', 'last_name', 'email', 'profile_picture', 
             'address', 'city', 'country', 'is_verified', 'is_doctor_verified',
-            'specialization', 'license_number', 'years_of_experience', 'bio',
+            'specializations', 'license_number', 'years_of_experience', 'bio',
             'consultation_fee', 'average_rating', 'total_reviews', 'educations',
             'awards', 'memberships', 'publications', 'research_interests'
         )
@@ -231,7 +234,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             'id', 'email', 'first_name', 'last_name', 'full_name',
             'phone_number', 'date_of_birth', 'gender', 'user_type',
             'profile_picture', 'is_verified', 'date_joined', 'last_login',
-            'doctor_profile', 'is_active', 'is_staff'
+            'doctor_profile', 'is_active', 'is_staff', 'city', 'address', 'country'
         ]
         read_only_fields = [
             'id', 'email', 'user_type', 'is_verified', 'date_joined',

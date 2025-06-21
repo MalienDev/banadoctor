@@ -3,6 +3,19 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { useState, useEffect, useRef } from 'react';
+import { BellIcon } from '@heroicons/react/24/outline';
+import api from '@/lib/api';
+
+// Notification type
+type Notification = {
+  id: number;
+  recipient: number;
+  message: string;
+  notification_type: string;
+  is_read: boolean;
+  created_at: string;
+};
 
 // Define navigation links with roles
 const navLinks = [
@@ -20,6 +33,57 @@ const navLinks = [
 const Navbar = () => {
   const { user, logout, isAuthenticated } = useAuth();
   const pathname = usePathname();
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const fetchNotifications = async () => {
+    if (!isAuthenticated) return;
+    try {
+      const res = await api.get('/notifications/');
+      setNotifications(res.data.results);
+      const unread = res.data.results.filter((n: Notification) => !n.is_read).length;
+      setUnreadCount(unread);
+    } catch (error) {
+      console.error('Failed to fetch notifications:', error);
+    }
+  };
+
+  useEffect(() => {
+    fetchNotifications();
+    const interval = setInterval(fetchNotifications, 30000); // Poll every 30 seconds
+    return () => clearInterval(interval);
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const markAsRead = async (id: number) => {
+    try {
+      await api.post(`/notifications/${id}/mark-as-read/`);
+      fetchNotifications(); // Refresh list
+    } catch (error) {
+      console.error('Failed to mark notification as read:', error);
+    }
+  };
+
+  const markAllAsRead = async () => {
+    try {
+      await api.post('/notifications/mark-all-as-read/');
+      fetchNotifications(); // Refresh list
+      setIsDropdownOpen(false);
+    } catch (error) {
+      console.error('Failed to mark all notifications as read:', error);
+    }
+  };
 
   const isActive = (path: string) => {
     return pathname === path ? 'bg-gray-900 text-white' : 'text-gray-300 hover:bg-gray-700 hover:text-white';
@@ -58,6 +122,41 @@ const Navbar = () => {
           </div>
           <div className="hidden md:block">
             <div className="ml-4 flex items-center md:ml-6">
+              {/* Notification dropdown */}
+              <div className="relative" ref={dropdownRef}>
+                <button 
+                  onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                  className="p-1 rounded-full text-gray-400 hover:text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-white"
+                >
+                  <span className="sr-only">View notifications</span>
+                  <BellIcon className="h-6 w-6" aria-hidden="true" />
+                  {unreadCount > 0 && (
+                    <span className="absolute top-0 right-0 block h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
+                  )}
+                </button>
+                {isDropdownOpen && (
+                  <div className="origin-top-right absolute right-0 mt-2 w-80 rounded-md shadow-lg py-1 bg-white ring-1 ring-black ring-opacity-5 z-50">
+                    <div className="px-4 py-2 text-sm text-gray-700 font-bold flex justify-between items-center">
+                      <span>Notifications</span>
+                      {notifications.length > 0 && <button onClick={markAllAsRead} className='text-xs text-blue-500 hover:underline'>Tout marquer comme lu</button>}
+                    </div>
+                    <div className="divide-y divide-gray-100 max-h-96 overflow-y-auto">
+                      {notifications.length > 0 ? notifications.map(n => (
+                        <div key={n.id} className={`p-4 text-sm ${!n.is_read ? 'bg-blue-50' : ''}`}>
+                          <p className='text-gray-800'>{n.message}</p>
+                          <div className="flex justify-between items-center mt-2">
+                            <span className='text-xs text-gray-500'>{new Date(n.created_at).toLocaleString()}</span>
+                            {!n.is_read && <button onClick={() => markAsRead(n.id)} className='text-xs text-blue-500 hover:underline'>Marquer comme lu</button>}
+                          </div>
+                        </div>
+                      )) : (
+                        <p className="text-center text-gray-500 py-4">Aucune notification.</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <div className="ml-3 relative">
                 <div className="flex items-center">
                   <span className="text-white mr-4">

@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import re
 import warnings
 from io import StringIO
 from pathlib import Path
@@ -9,16 +10,20 @@ from typing import TYPE_CHECKING
 
 import coverage
 import pytest
+from coverage.exceptions import CoverageWarning
 from coverage.results import display_covered
 from coverage.results import should_fail_under
 
 from . import CovDisabledWarning
 from . import CovReportWarning
+from . import PytestCovWarning
 from . import compat
 from . import embed
 
 if TYPE_CHECKING:
     from .engine import CovController
+
+COVERAGE_SQLITE_WARNING_RE = re.compile('unclosed database in <sqlite3.Connection object at', re.I)
 
 
 def validate_report(arg):
@@ -310,12 +315,29 @@ class CovPlugin:
 
     # we need to wrap pytest_runtestloop. by the time pytest_sessionfinish
     # runs, it's too late to set testsfailed
-    @pytest.hookimpl(hookwrapper=True)
+    @pytest.hookimpl(wrapper=True)
     def pytest_runtestloop(self, session):
-        yield
-
         if self._disabled:
-            return
+            return (yield)
+
+        # we add default warning configuration to prevent certain warnings to bubble up as errors due to rigid filterwarnings configuration
+        for _, message, category, _, _ in warnings.filters:
+            if category is ResourceWarning and message == COVERAGE_SQLITE_WARNING_RE:
+                break
+        else:
+            warnings.filterwarnings('default', 'unclosed database in <sqlite3.Connection object at', ResourceWarning)
+        for _, _, category, _, _ in warnings.filters:
+            if category is PytestCovWarning:
+                break
+        else:
+            warnings.simplefilter('once', PytestCovWarning)
+        for _, _, category, _, _ in warnings.filters:
+            if category is CoverageWarning:
+                break
+        else:
+            warnings.simplefilter('once', CoverageWarning)
+
+        result = yield
 
         compat_session = compat.SessionWrapper(session)
 
@@ -349,6 +371,8 @@ class CovPlugin:
                 session.config.pluginmanager.getplugin('terminalreporter').write(f'\nERROR: {message}\n', red=True, bold=True)
                 # make sure we get the EXIT_TESTSFAILED exit code
                 compat_session.testsfailed += 1
+
+        return result
 
     def write_heading(self, terminalreporter):
         if not self._wrote_heading:

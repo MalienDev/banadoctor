@@ -3,7 +3,6 @@
 import { MagnifyingGlassIcon, FunnelIcon, MapPinIcon, StarIcon } from '@heroicons/react/24/solid';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
 
 // New Doctor type matching the backend serializer
@@ -25,28 +24,65 @@ type Doctor = {
   last_name: string;
   phone_number: string;
   profile_picture: string | null;
-  doctor_profile: DoctorProfile;
+  doctor_profile?: DoctorProfile;
 };
 
 export default function DoctorsPage() {
   const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCity, setSelectedCity] = useState('');
+  const [cities, setCities] = useState<string[]>([]);
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalResults, setTotalResults] = useState(0);
+
+  const fetchDoctors = async (page = 1, query = '', city = '') => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        page: page.toString(),
+        search: query,
+        city: city,
+      });
+
+      const response = await api.get(`/users/search-doctors/?${params.toString()}`);
+      
+      setDoctors(response.data.results);
+      setTotalResults(response.data.count);
+      setTotalPages(Math.ceil(response.data.count / response.data.page_size));
+      setCurrentPage(page);
+
+      // Dynamically populate cities from doctor profiles, avoiding duplicates
+      const uniqueCities = Array.from(new Set(response.data.results.map((doc: Doctor) => doc.doctor_profile?.city).filter(Boolean)));
+      setCities(prevCities => [...new Set([...prevCities, ...uniqueCities])] as string[]);
+
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An unknown error occurred');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchDoctors = async () => {
-      try {
-        const response = await api.get('/doctors/');
-        setDoctors(response.data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'An unknown error occurred');
-      } finally {
-        setLoading(false);
-      }
-    };
+    fetchDoctors(currentPage, searchQuery, selectedCity);
+  }, [currentPage]);
 
-    fetchDoctors();
-  }, []);
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    setCurrentPage(1); // Reset to first page on new search
+    fetchDoctors(1, searchQuery, selectedCity);
+  };
+
+  const handlePageChange = (newPage: number) => {
+    if (newPage >= 1 && newPage <= totalPages) {
+      setCurrentPage(newPage);
+    }
+  };
 
   if (loading) {
     return (
@@ -77,7 +113,7 @@ export default function DoctorsPage() {
       {/* Search and Filter */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <div className="bg-white p-6 rounded-lg shadow">
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between space-y-4 md:space-y-0 md:space-x-4">
+          <form onSubmit={handleSearch} className="flex flex-col md:flex-row md:items-center md:justify-between space-y-4 md:space-y-0 md:space-x-4">
             <div className="flex-1">
               <div className="relative rounded-md shadow-sm">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -85,6 +121,8 @@ export default function DoctorsPage() {
                 </div>
                 <input
                   type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
                   className="focus:ring-primary-500 focus:border-primary-500 block w-full pl-10 sm:text-sm border-gray-300 rounded-md h-10"
                   placeholder="Spécialité, symptôme, médecin..."
                 />
@@ -95,27 +133,27 @@ export default function DoctorsPage() {
                 <select
                   id="location"
                   name="location"
+                  value={selectedCity}
+                  onChange={(e) => setSelectedCity(e.target.value)}
                   className="block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md h-10"
-                  defaultValue=""
                 >
                   <option value="">Toutes les villes</option>
-                  <option>Paris</option>
-                  <option>Lyon</option>
-                  <option>Marseille</option>
-                  <option>Toulouse</option>
+                  {cities.map(city => (
+                    <option key={city} value={city}>{city}</option>
+                  ))}
                 </select>
               </div>
             </div>
             <div className="flex-shrink-0">
               <button
-                type="button"
-                className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 h-10"
+                type="submit"
+                disabled={loading}
+                className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 h-10 disabled:bg-gray-400"
               >
-                <FunnelIcon className="-ml-1 mr-2 h-5 w-5 text-gray-400" aria-hidden="true" />
-                Filtres
+                {loading ? 'Recherche...' : 'Rechercher'}
               </button>
             </div>
-          </div>
+          </form>
         </div>
 
         {/* Doctors List */}
@@ -138,13 +176,13 @@ export default function DoctorsPage() {
                       <div className="flex items-center justify-between">
                         <h3 className="text-lg font-medium text-gray-900">{`Dr. ${doctor.first_name} ${doctor.last_name}`}</h3>
                       </div>
-                      <p className="mt-1 text-sm text-gray-600">{doctor.doctor_profile.specialization}</p>
+                      <p className="mt-1 text-sm text-gray-600">{doctor.doctor_profile?.specialization || 'Spécialisation non définie'}</p>
                       <div className="mt-2 flex items-center text-sm text-gray-500">
                         <MapPinIcon className="flex-shrink-0 mr-1.5 h-4 w-4 text-gray-400" aria-hidden="true" />
-                        <p>{`${doctor.doctor_profile.address}, ${doctor.doctor_profile.city}`}</p>
+                        <p>{doctor.doctor_profile ? `${doctor.doctor_profile.address || 'Adresse non fournie'}, ${doctor.doctor_profile.city || 'Ville non fournie'}` : 'Localisation non disponible'}</p>
                       </div>
                       <div className="mt-3 flex items-center justify-between">
-                        <div className="text-lg font-semibold text-gray-900">{doctor.doctor_profile.consultation_fee}€</div>
+                        <div className="text-lg font-semibold text-gray-900">{doctor.doctor_profile?.consultation_fee ? `${doctor.doctor_profile.consultation_fee}€` : 'Tarif non défini'}</div>
                       </div>
                     </div>
                   </div>
@@ -173,18 +211,22 @@ export default function DoctorsPage() {
           >
             <div className="hidden sm:block">
               <p className="text-sm text-gray-700">
-                Affichage de <span className="font-medium">1</span> à <span className="font-medium">{doctors.length}</span> sur{' '}
-                <span className="font-medium">{doctors.length}</span> médecins
+                Affichage de <span className="font-medium">{(currentPage - 1) * 10 + 1}</span> à <span className="font-medium">{(currentPage - 1) * 10 + doctors.length}</span> sur{' '}
+                <span className="font-medium">{totalResults}</span> médecins
               </p>
             </div>
             <div className="flex-1 flex justify-between sm:justify-end">
               <button
-                className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-                disabled
+                onClick={() => handlePageChange(currentPage - 1)}
+                disabled={currentPage === 1 || loading}
+                className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
               >
                 Précédent
               </button>
-              <button className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+              <button 
+                onClick={() => handlePageChange(currentPage + 1)}
+                disabled={currentPage === totalPages || loading}
+                className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50">
                 Suivant
               </button>
             </div>

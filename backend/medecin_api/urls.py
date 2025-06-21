@@ -42,6 +42,12 @@ v1_patterns = [
     
     # Include all URLs from the 'appointments' app
     path('appointments/', include('appointments.urls')),
+
+    # Include all URLs from the 'payments' app
+    path('payments/', include('payments.urls')),
+
+    # Include all URLs from the 'notifications' app
+    path('notifications/', include('notifications.urls')),
 ]
 
 urlpatterns = [
